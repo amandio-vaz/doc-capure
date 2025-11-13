@@ -27,6 +27,8 @@ export default function App() {
     const [selectedChapterIndex, setSelectedChapterIndex] = useState<number>(0);
     const [audioState, setAudioState] = useState<AudioState>({ status: 'idle', chapterIndex: null });
     const [searchQuery, setSearchQuery] = useState<string>('');
+    const [playbackProgress, setPlaybackProgress] = useState(0);
+
     const [theme, setTheme] = useState<Theme>(() => {
         const savedTheme = localStorage.getItem('theme') as Theme | null;
         if (savedTheme) return savedTheme;
@@ -73,8 +75,13 @@ export default function App() {
     const audioBufferRef = useRef<AudioBuffer | null>(null);
     const playbackProgressRef = useRef<number>(0);
     const playbackStartTimeRef = useRef<number>(0);
+    const animationFrameRef = useRef<number | null>(null);
 
     const stopCurrentAudio = useCallback(() => {
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+        }
         if (audioSourceRef.current) {
             audioSourceRef.current.onended = null;
             audioSourceRef.current.stop();
@@ -96,11 +103,32 @@ export default function App() {
         source.playbackRate.value = audioConfig.speed;
         source.connect(audioContext.destination);
 
+        const updateProgress = () => {
+            if (!audioContextRef.current || !audioBufferRef.current) return;
+
+            const elapsedSinceStart = audioContext.currentTime - playbackStartTimeRef.current;
+            const currentPosition = startTime + (elapsedSinceStart * audioConfig.speed);
+            const duration = audioBufferRef.current.duration;
+            const progress = Math.min(100, (currentPosition / duration) * 100);
+
+            setPlaybackProgress(progress);
+
+            if (progress < 100) {
+                animationFrameRef.current = requestAnimationFrame(updateProgress);
+            }
+        };
+
+
         source.onended = () => {
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current);
+                animationFrameRef.current = null;
+            }
             setAudioState(prev => {
                 if (prev.status === 'playing' && prev.chapterIndex === chapterIndex) {
                     playbackProgressRef.current = 0;
                     audioBufferRef.current = null;
+                    setPlaybackProgress(0);
                     return { status: 'idle', chapterIndex: null };
                 }
                 return prev;
@@ -108,16 +136,20 @@ export default function App() {
         };
 
         source.start(0, startTime);
-        playbackStartTimeRef.current = audioContext.currentTime - startTime;
+        playbackStartTimeRef.current = audioContext.currentTime;
         audioSourceRef.current = source;
         setAudioState({ status: 'playing', chapterIndex });
+
+        animationFrameRef.current = requestAnimationFrame(updateProgress);
+
     }, [audioConfig.speed, stopCurrentAudio]);
 
     const handleAudioToggle = useCallback(async (chapterIndex: number) => {
         // PAUSE: If playing the current chapter, pause it.
         if (audioState.status === 'playing' && audioState.chapterIndex === chapterIndex) {
             if (audioContextRef.current) {
-                playbackProgressRef.current += audioContextRef.current.currentTime - playbackStartTimeRef.current;
+                const elapsed = audioContextRef.current.currentTime - playbackStartTimeRef.current;
+                playbackProgressRef.current += elapsed * audioConfig.speed;
             }
             stopCurrentAudio();
             setAudioState({ status: 'paused', chapterIndex });
@@ -135,6 +167,7 @@ export default function App() {
         // PLAY NEW/IDLE: If idle, or a different chapter is selected, start from scratch.
         stopCurrentAudio();
         playbackProgressRef.current = 0;
+        setPlaybackProgress(0);
         audioBufferRef.current = null;
 
         setAudioState({ status: 'loading', chapterIndex });
@@ -229,7 +262,7 @@ export default function App() {
             </button>
             <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-indigo-600 flex items-center justify-center gap-3">
                 <SparklesIcon className="w-10 h-10" />
-                DocuSynth AI
+                AleisterCrawlerDocs
             </h1>
             <p className="text-gray-500 dark:text-gray-400 mt-2 text-lg">Transforme documentações em conteúdo estruturado e audível.</p>
         </header>
@@ -365,6 +398,16 @@ export default function App() {
                                                     </div>
                                                 </div>
                                             </div>
+                                            {(audioState.status === 'playing' || audioState.status === 'paused') && audioState.chapterIndex === selectedChapterIndex && (
+                                                <div className="mt-4 w-full">
+                                                    <div className="bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+                                                        <div 
+                                                            className="bg-purple-600 h-2 rounded-full" 
+                                                            style={{ width: `${playbackProgress}%` }}
+                                                        ></div>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                         
                                         {audioState.status === 'error' && audioState.chapterIndex === selectedChapterIndex && <div className="mb-4 p-2 text-sm bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded border border-red-300 dark:border-red-700">{audioState.errorMessage}</div>}
