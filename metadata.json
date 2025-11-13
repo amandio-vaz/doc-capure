@@ -1,5 +1,5 @@
 {
-  "name": "DocCapure AI",
+  "name": "GPS AI - DocCapure",
   "description": "Uma aplicação de IA que transforma documentações técnicas online em formatos estruturados (HTML, Markdown) e gera resumos em áudio para cada seção. Apenas forneça uma URL para começar.",
   "requestFramePermissions": []
 }
