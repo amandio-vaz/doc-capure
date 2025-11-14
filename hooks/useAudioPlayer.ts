@@ -24,6 +24,7 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
     const playbackProgressRef = useRef<number>(0);
     const playbackStartTimeRef = useRef<number>(0);
     const animationFrameRef = useRef<number | null>(null);
+    const generationIdRef = useRef(0);
 
     const stopAudio = useCallback((resetState = true) => {
         if (animationFrameRef.current) {
@@ -116,6 +117,7 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
         setPlaybackProgress(0);
         audioBufferRef.current = null;
 
+        const currentGenerationId = ++generationIdRef.current;
         setAudioState({ status: 'loading', chapterIndex, paragraphIndex });
         
         try {
@@ -123,22 +125,32 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
 
             const base64Audio = await generateSpeech(text, audioConfig.voice);
             
+            if (currentGenerationId !== generationIdRef.current) {
+                return;
+            }
+            
             if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
                 audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             }
             
             const audioContext = audioContextRef.current;
             const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
+
+            if (currentGenerationId !== generationIdRef.current) {
+                return;
+            }
             
             audioBufferRef.current = audioBuffer;
             playInternal(audioBuffer, 0, chapterIndex, paragraphIndex);
 
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : "Erro ao tocar áudio.";
-            setAudioState({ status: 'error', chapterIndex, paragraphIndex, errorMessage });
-            setTimeout(() => setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null }), 5000);
+            if (currentGenerationId === generationIdRef.current) {
+                const errorMessage = err instanceof Error ? err.message : "Erro ao tocar áudio.";
+                setAudioState({ status: 'error', chapterIndex, paragraphIndex, errorMessage });
+                setTimeout(() => setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null }), 5000);
+            }
         }
-    }, [audioState, stopAudio, audioConfig.voice, playInternal]);
+    }, [audioState, stopAudio, audioConfig.voice, audioConfig.speed, playInternal]);
 
     useEffect(() => {
         return () => {

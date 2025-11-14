@@ -10,25 +10,30 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 export async function extractDocumentation(url: string): Promise<Documentation> {
     try {
-        const prompt = `Você é um assistente de IA especialista em processar documentação técnica de sites. Analise o conteúdo encontrado na URL a seguir: ${url}. Use a busca do Google para acessar e entender o conteúdo. Sua tarefa é extrair e estruturar a documentação em um formato JSON claro e conciso.
+        const prompt = `Você é um assistente de IA especialista em web-crawling e processamento de documentação técnica. Sua tarefa é realizar uma varredura completa na documentação a partir da URL inicial fornecida: ${url}.
 
-A estrutura do JSON deve ser a seguinte:
+**Processo:**
+1.  **Análise Inicial:** Comece na URL inicial e identifique a estrutura de navegação principal da documentação (ex: menu lateral, índice de capítulos, links de "próxima página").
+2.  **Rastreamento (Crawling):** Siga os links de navegação de forma recursiva para descobrir todos os tópicos e subtópicos da documentação. Mantenha-se dentro do escopo da documentação principal, evitando links externos como blogs, fóruns ou páginas de marketing.
+3.  **Extração de Conteúdo:** Para cada página relevante que você visitar, extraia o conteúdo principal, focando no texto técnico, exemplos de código e explicações. Ignore elementos repetitivos como cabeçalhos, rodapés, menus e anúncios.
+4.  **Estruturação Final:** Consolide todo o conteúdo extraído em um único objeto JSON. Organize o conteúdo em capítulos lógicos, respeitando a hierarquia encontrada no site (tópicos principais como capítulos, subtópicos como seções dentro do conteúdo do capítulo).
+
+**Formato de Saída (JSON):**
+O JSON final deve seguir esta estrutura:
 {
-  "title": "O título principal da documentação.",
+  "title": "O título principal e geral de toda a documentação.",
   "chapters": [
     {
-      "title": "O título do capítulo.",
-      "content": "O conteúdo completo do capítulo em formato Markdown."
+      "title": "O título do capítulo/seção principal.",
+      "content": "O conteúdo completo e consolidado deste capítulo, em formato Markdown. Preserve a formatação, blocos de código, listas e links."
     }
   ]
 }
 
-Regras:
-- O \`content\` deve ser em formato Markdown, preservando a formatação do texto, blocos de código (com a linguagem especificada, se possível), listas e links.
-- Ignore elementos de navegação, cabeçalhos, rodapés e anúncios. Foco total no conteúdo principal.
-- Agrupe seções muito pequenas em capítulos lógicos para uma melhor organização.
-
-Responda exclusivamente com o objeto JSON. Sua resposta deve ser apenas o JSON, sem texto explicativo, comentários ou blocos de código markdown (\`\`\`).`;
+**Instruções Importantes:**
+- Use a ferramenta de busca do Google para acessar o conteúdo das páginas.
+- Combine seções curtas e relacionadas em capítulos maiores e mais coesos, se fizer sentido.
+- A sua resposta final deve ser **exclusivamente** o objeto JSON completo. Não inclua texto explicativo, comentários ou blocos de código markdown (\`\`\`) envolvendo o JSON.`;
 
         const response = await ai.models.generateContent({
             model: "gemini-2.5-pro",
@@ -110,7 +115,7 @@ ${chapterContent}
 **Instruções:**
 1.  Foque nos pontos-chave, conceitos principais e informações essenciais.
 2.  Ignore detalhes triviais ou exemplos de código excessivamente longos.
-3.  O resumo deve ser claro, coeso и de fácil compreensão.
+3.  O resumo deve ser claro, coeso e de fácil compreensão.
 4.  Retorne o resumo em formato Markdown.
 
 Responda exclusivamente com o resumo em Markdown.`;

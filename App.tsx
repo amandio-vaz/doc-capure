@@ -1,12 +1,13 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Documentation, Chapter, AudioConfig } from './types';
 import { extractDocumentation, generateChapterSummary } from './services/geminiService';
-import { generateAndDownloadMarkdown, generateAndDownloadHtml, generateAndPrint } from './utils/fileUtils';
+import { generateAndDownloadMarkdown, generateAndDownloadHtml, generateAndPrint, downloadAsFile } from './utils/fileUtils';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
 import {
     SparklesIcon, LinkIcon, LoaderIcon, PlayIcon, PauseIcon,
     StopIcon, MarkdownIcon, HtmlIcon, PdfIcon, ChevronLeftIcon, ChevronRightIcon,
-    SearchIcon, SunIcon, MoonIcon, CopyIcon, CheckIcon, DocumentTextIcon
+    SearchIcon, SunIcon, MoonIcon, CopyIcon, CheckIcon, DocumentTextIcon,
+    ArrowsPointingOutIcon, ArrowsPointingInIcon
 } from './components/icons';
 
 declare const showdown: any;
@@ -24,7 +25,10 @@ export default function App() {
     const [doc, setDoc] = useState<Documentation | null>(null);
     const [selectedChapterIndex, setSelectedChapterIndex] = useState<number>(0);
     const [currentParagraphIndex, setCurrentParagraphIndex] = useState<number>(0);
-    const [searchQuery, setSearchQuery] = useState<string>('');
+    const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
+    const [searchQuery, setSearchQuery] = useState<string>(() => {
+        return localStorage.getItem('chapterSearchQuery') || '';
+    });
     const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
     const [summaryState, setSummaryState] = useState<{
         isLoading: boolean;
@@ -92,12 +96,26 @@ export default function App() {
     }, [theme]);
 
     useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsFocusMode(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
+    useEffect(() => {
         try {
             localStorage.setItem('audioConfig', JSON.stringify(audioConfig));
         } catch (e) {
             console.error("Falha ao salvar a configuração de áudio no localStorage", e);
         }
     }, [audioConfig]);
+
+    useEffect(() => {
+        localStorage.setItem('chapterSearchQuery', searchQuery);
+    }, [searchQuery]);
 
     const paragraphRefs = useRef<(HTMLDivElement | null)[]>([]);
     const autoPlayOnChapterChangeRef = useRef(false);
@@ -127,7 +145,7 @@ export default function App() {
     useEffect(() => {
         paragraphRefs.current[currentParagraphIndex]?.scrollIntoView({
             behavior: 'smooth',
-            block: 'start',
+            block: 'center',
         });
     }, [currentParagraphIndex, paragraphs]);
 
@@ -135,8 +153,12 @@ export default function App() {
         const newIndex = direction === 'next' ? currentParagraphIndex + 1 : currentParagraphIndex - 1;
 
         if (newIndex >= 0 && newIndex < paragraphs.length) {
+            // If audio is currently active (playing or loading), we want it to follow navigation.
+            const isAudioActive = audioState.status === 'playing' || audioState.status === 'loading';
+            
             setCurrentParagraphIndex(newIndex);
-            if (audioState.status === 'playing') {
+            
+            if (isAudioActive) {
                 handleAudioToggle(selectedChapterIndex, newIndex);
             }
         }
@@ -239,6 +261,12 @@ export default function App() {
         });
     };
 
+    const handleExportSummary = () => {
+        if (!summaryState.content || !summaryState.chapterTitle) return;
+        const filename = `resumo_${summaryState.chapterTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.txt`;
+        downloadAsFile(summaryState.content, filename, 'text/plain;charset=utf-8');
+    };
+
     const handleGoToChapterFromSummary = () => {
         if (summaryState.chapterIndex !== null) {
             handleChapterSelect(summaryState.chapterIndex);
@@ -305,95 +333,122 @@ export default function App() {
         </div>
     );
 
+    const Footer = () => (
+        <footer className="text-center py-6 border-t border-gray-200 dark:border-gray-700">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+                Powered by Amândio Vaz - 2025
+            </p>
+        </footer>
+    );
+
     return (
-        <div className="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen">
-            <Header />
-            <main className="p-4 md:p-8">
+        <div className="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex flex-col">
+            {!isFocusMode && <Header />}
+            <main className={`flex-grow ${isFocusMode ? 'p-0' : 'p-4 md:p-8'}`}>
                 {!doc && <UrlForm />}
                 {isLoading && (
                     <div className="text-center mt-12 flex flex-col items-center">
                         <LoaderIcon className="w-12 h-12 animate-spin text-indigo-500" />
-                        <p className="mt-4 text-lg text-gray-500 dark:text-gray-400">Analisando e estruturando a documentação... Isso pode levar um momento.</p>
+                        <p className="mt-4 text-lg text-gray-500 dark:text-gray-400">Mapeando a estrutura do site e extraindo toda a documentação... Isso pode levar alguns minutos.</p>
                     </div>
                 )}
                 {error && <div className="text-center mt-8 bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 p-4 rounded-md max-w-2xl mx-auto border border-red-300 dark:border-red-700">{error}</div>}
                 
                 {doc && (
-                    <div className="max-w-7xl mx-auto mt-6">
-                        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
-                            <h2 className="text-2xl font-bold text-gray-900 dark:text-white text-center md:text-left">{doc.title}</h2>
-                            <div className="flex items-center gap-3 flex-wrap justify-center md:justify-end">
-                                <button 
-                                    onClick={handleCopyToClipboard} 
-                                    className={`flex items-center gap-2 text-sm px-3 py-2 rounded-md transition ${
-                                        copyStatus === 'copied' 
-                                        ? 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-200' 
-                                        : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'
-                                    }`} 
-                                    title="Copiar conteúdo em Markdown"
-                                >
-                                    {copyStatus === 'copied' ? <CheckIcon className="w-5 h-5" /> : <CopyIcon className="w-5 h-5" />}
-                                    {copyStatus === 'copied' ? 'Copiado!' : 'Copiar Markdown'}
-                                </button>
-                                <button onClick={() => handleDownload('md')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Baixar arquivo no formato Markdown">
-                                    <MarkdownIcon className="w-5 h-5" /> Markdown
-                                </button>
-                                <button onClick={() => handleDownload('html')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Baixar arquivo no formato HTML">
-                                    <HtmlIcon className="w-5 h-5" /> HTML
-                                </button>
-                                <button onClick={() => handleDownload('pdf')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Gera uma versão para impressão que pode ser salva como PDF">
-                                    <PdfIcon className="w-5 h-5" /> Exportar para PDF
-                                </button>
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                            <aside className="lg:col-span-4 xl:col-span-3">
-                                <div className="sticky top-8 bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-                                    <h3 className="text-xl font-semibold mb-4 border-b border-gray-300 dark:border-gray-600 pb-2">Capítulos</h3>
-                                    <div className="relative mb-4">
-                                        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
-                                        <input
-                                            type="text"
-                                            placeholder="Buscar capítulos..."
-                                            value={searchQuery}
-                                            onChange={(e) => setSearchQuery(e.target.value)}
-                                            className="w-full bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-md pl-10 pr-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
-                                        />
-                                    </div>
-                                    <ul className="space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
-                                        {filteredChapters.length > 0 ? (
-                                            filteredChapters.map((chapter) => {
-                                                const originalIndex = doc.chapters.indexOf(chapter);
-                                                return (
-                                                <li key={originalIndex} className="flex items-center gap-2">
-                                                    <button onClick={() => handleChapterSelect(originalIndex)} className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === originalIndex ? 'bg-indigo-600 text-white font-bold shadow-md' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
-                                                        {chapter.title}
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleGenerateSummary(originalIndex)}
-                                                        disabled={summaryState.isLoading && summaryState.chapterIndex === originalIndex}
-                                                        className="flex-shrink-0 p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 disabled:opacity-50 disabled:cursor-wait transition"
-                                                        title="Gerar resumo do capítulo"
-                                                    >
-                                                        {summaryState.isLoading && summaryState.chapterIndex === originalIndex ? (
-                                                            <LoaderIcon className="w-5 h-5 animate-spin" />
-                                                        ) : (
-                                                            <DocumentTextIcon className="w-5 h-5" />
-                                                        )}
-                                                    </button>
-                                                </li>
-                                            )})
-                                        ) : (
-                                            <li className="text-gray-500 dark:text-gray-400 text-center p-4 text-sm">Nenhum capítulo encontrado.</li>
-                                        )}
-                                    </ul>
+                    <div className={`${isFocusMode ? '' : 'max-w-7xl mx-auto mt-6'}`}>
+                        {!isFocusMode && (
+                            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <h2 className="text-2xl font-bold text-gray-900 dark:text-white text-center md:text-left">{doc.title}</h2>
+                                <div className="flex items-center gap-3 flex-wrap justify-center md:justify-end">
+                                    <button 
+                                        onClick={handleCopyToClipboard} 
+                                        className={`flex items-center gap-2 text-sm px-3 py-2 rounded-md transition ${
+                                            copyStatus === 'copied' 
+                                            ? 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-200' 
+                                            : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'
+                                        }`} 
+                                        title="Copiar conteúdo em Markdown"
+                                    >
+                                        {copyStatus === 'copied' ? <CheckIcon className="w-5 h-5" /> : <CopyIcon className="w-5 h-5" />}
+                                        {copyStatus === 'copied' ? 'Copiado!' : 'Copiar Markdown'}
+                                    </button>
+                                    <button onClick={() => handleDownload('md')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Baixar arquivo no formato Markdown">
+                                        <MarkdownIcon className="w-5 h-5" /> Markdown
+                                    </button>
+                                    <button onClick={() => handleDownload('html')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Baixar arquivo no formato HTML">
+                                        <HtmlIcon className="w-5 h-5" /> HTML
+                                    </button>
+                                    <button onClick={() => handleDownload('pdf')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Gera uma versão para impressão que pode ser salva como PDF">
+                                        <PdfIcon className="w-5 h-5" /> Exportar para PDF
+                                    </button>
                                 </div>
-                            </aside>
-                            <article className="lg:col-span-8 xl:col-span-9 bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700 min-h-[70vh]">
+                            </div>
+                        )}
+                        <div className={`${isFocusMode ? '' : 'grid grid-cols-1 lg:grid-cols-12 gap-8'}`}>
+                            {!isFocusMode && (
+                                <aside className="lg:col-span-4 xl:col-span-3">
+                                    <div className="sticky top-8 bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+                                        <h3 className="text-xl font-semibold mb-4 border-b border-gray-300 dark:border-gray-600 pb-2">Capítulos</h3>
+                                        <div className="relative mb-4">
+                                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+                                            <input
+                                                type="text"
+                                                placeholder="Buscar capítulos..."
+                                                value={searchQuery}
+                                                onChange={(e) => setSearchQuery(e.target.value)}
+                                                className="w-full bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white rounded-md pl-10 pr-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+                                            />
+                                        </div>
+                                        <ul className="space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
+                                            {filteredChapters.length > 0 ? (
+                                                filteredChapters.map((chapter) => {
+                                                    const originalIndex = doc.chapters.indexOf(chapter);
+                                                    return (
+                                                    <li key={originalIndex} className="flex items-center gap-2">
+                                                        <button onClick={() => handleChapterSelect(originalIndex)} className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === originalIndex ? 'bg-indigo-600 text-white font-bold shadow-md' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
+                                                            {chapter.title}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleGenerateSummary(originalIndex)}
+                                                            disabled={summaryState.isLoading && summaryState.chapterIndex === originalIndex}
+                                                            className="flex-shrink-0 p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 disabled:opacity-50 disabled:cursor-wait transition"
+                                                            title="Gerar resumo do capítulo"
+                                                        >
+                                                            {summaryState.isLoading && summaryState.chapterIndex === originalIndex ? (
+                                                                <LoaderIcon className="w-5 h-5 animate-spin" />
+                                                            ) : (
+                                                                <DocumentTextIcon className="w-5 h-5" />
+                                                            )}
+                                                        </button>
+                                                    </li>
+                                                )})
+                                            ) : (
+                                                <li className="text-gray-500 dark:text-gray-400 text-center p-4 text-sm">Nenhum capítulo encontrado.</li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                </aside>
+                            )}
+                            <article className={`${
+                                isFocusMode
+                                ? 'h-screen overflow-y-auto'
+                                : 'lg:col-span-8 xl:col-span-9 min-h-[70vh]'
+                                } bg-white dark:bg-gray-800 rounded-lg p-6 border border-gray-200 dark:border-gray-700`}
+                            >
                                 {doc.chapters[selectedChapterIndex] && (
                                     <>
                                         <div className="mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
-                                            <h3 className="text-2xl font-bold text-indigo-500 dark:text-indigo-400 mb-4">{doc.chapters[selectedChapterIndex].title}</h3>
+                                            <div className="flex justify-between items-start mb-4">
+                                                <h3 className="text-2xl font-bold text-indigo-500 dark:text-indigo-400">{doc.chapters[selectedChapterIndex].title}</h3>
+                                                <button
+                                                    onClick={() => setIsFocusMode(true)}
+                                                    className="p-2 -mr-2 -mt-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                    title="Modo Focado"
+                                                    aria-label="Entrar no modo focado"
+                                                >
+                                                    <ArrowsPointingOutIcon className="w-6 h-6" />
+                                                </button>
+                                            </div>
                                             
                                             {paragraphs.length > 1 && (
                                                 <div className="flex items-center justify-between gap-4 mb-4 bg-gray-100 dark:bg-gray-900 p-2 rounded-lg">
@@ -477,18 +532,20 @@ export default function App() {
                                         {audioState.status === 'error' && audioState.chapterIndex === selectedChapterIndex && <div className="mb-4 p-2 text-sm bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded border border-red-300 dark:border-red-700">{audioState.errorMessage}</div>}
                                         
                                         <div className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:rounded-md prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-gray-600 prose-img:rounded-md`}>
-                                            {paragraphs.map((p, index) => (
-                                                <div
-                                                    key={index}
-                                                    ref={el => { paragraphRefs.current[index] = el; }}
-                                                    className={`transition-all duration-300 rounded-xl p-4 -m-4 ${
-                                                        index === currentParagraphIndex
-                                                            ? 'bg-purple-50 dark:bg-purple-900/30 ring-2 ring-purple-300 dark:ring-purple-700'
-                                                            : 'border-2 border-transparent'
-                                                    }`}
-                                                    dangerouslySetInnerHTML={{ __html: converter.makeHtml(p) }}
-                                                />
-                                            ))}
+                                            <div className={`${isFocusMode ? 'max-w-3xl mx-auto' : ''}`}>
+                                                {paragraphs.map((p, index) => (
+                                                    <div
+                                                        key={index}
+                                                        ref={el => { paragraphRefs.current[index] = el; }}
+                                                        className={`transition-all duration-300 rounded-xl p-4 -m-4 ${
+                                                            index === currentParagraphIndex
+                                                                ? 'bg-purple-50 dark:bg-purple-900/30 ring-2 ring-purple-300 dark:ring-purple-700'
+                                                                : 'border-2 border-transparent'
+                                                        }`}
+                                                        dangerouslySetInnerHTML={{ __html: converter.makeHtml(p) }}
+                                                    />
+                                                ))}
+                                            </div>
                                         </div>
                                     </>
                                 )}
@@ -496,33 +553,35 @@ export default function App() {
                         </div>
                     </div>
                 )}
+            </main>
 
-                {summaryState.isModalOpen && (
-                    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
-                            <header className="p-4 border-b border-gray-200 dark:border-gray-600">
-                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                                    Resumo de: <span className="text-indigo-500">{summaryState.chapterTitle}</span>
-                                </h3>
-                            </header>
-                            <main className="p-6 overflow-y-auto custom-scrollbar">
-                                {summaryState.isLoading ? (
-                                    <div className="flex flex-col items-center justify-center text-center text-gray-500 dark:text-gray-400">
-                                        <LoaderIcon className="w-10 h-10 animate-spin text-indigo-500 mb-4" />
-                                        <p>Gerando resumo com IA...</p>
-                                    </div>
-                                ) : summaryState.error ? (
-                                    <div className="bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 p-3 rounded-md border border-red-300 dark:border-red-700">
-                                        <strong>Erro:</strong> {summaryState.error}
-                                    </div>
-                                ) : summaryState.content ? (
-                                    <div
-                                        className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none`}
-                                        dangerouslySetInnerHTML={{ __html: converter.makeHtml(summaryState.content) }}
-                                    />
-                                ) : null}
-                            </main>
-                            <footer className="p-4 border-t border-gray-200 dark:border-gray-600 flex justify-between items-center">
+            {summaryState.isModalOpen && (
+                <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+                        <header className="p-4 border-b border-gray-200 dark:border-gray-600">
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                Resumo de: <span className="text-indigo-500">{summaryState.chapterTitle}</span>
+                            </h3>
+                        </header>
+                        <main className="p-6 overflow-y-auto custom-scrollbar">
+                            {summaryState.isLoading ? (
+                                <div className="flex flex-col items-center justify-center text-center text-gray-500 dark:text-gray-400">
+                                    <LoaderIcon className="w-10 h-10 animate-spin text-indigo-500 mb-4" />
+                                    <p>Gerando resumo com IA...</p>
+                                </div>
+                            ) : summaryState.error ? (
+                                <div className="bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 p-3 rounded-md border border-red-300 dark:border-red-700">
+                                    <strong>Erro:</strong> {summaryState.error}
+                                </div>
+                            ) : summaryState.content ? (
+                                <div
+                                    className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none`}
+                                    dangerouslySetInnerHTML={{ __html: converter.makeHtml(summaryState.content) }}
+                                />
+                            ) : null}
+                        </main>
+                        <footer className="p-4 border-t border-gray-200 dark:border-gray-600 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
                                 <button
                                     onClick={handleCopySummary}
                                     disabled={!summaryState.content || summaryState.isLoading}
@@ -535,27 +594,46 @@ export default function App() {
                                     {summaryState.summaryCopyStatus === 'copied' ? <CheckIcon className="w-5 h-5" /> : <CopyIcon className="w-5 h-5" />}
                                     <span>{summaryState.summaryCopyStatus === 'copied' ? 'Copiado!' : 'Copiar Resumo'}</span>
                                 </button>
-                                <div className="flex items-center gap-3">
-                                    <button
-                                        onClick={() => setSummaryState(prev => ({ ...prev, isModalOpen: false }))}
-                                        className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md font-semibold transition text-sm"
-                                    >
-                                        Fechar
-                                    </button>
-                                    <button
-                                        onClick={handleGoToChapterFromSummary}
-                                        disabled={summaryState.chapterIndex === null}
-                                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold transition text-sm disabled:opacity-50"
-                                    >
-                                        <span>Ir para Capítulo</span>
-                                        <ChevronRightIcon className="w-4 h-4" />
-                                    </button>
-                                </div>
-                            </footer>
-                        </div>
+                                <button
+                                    onClick={handleExportSummary}
+                                    disabled={!summaryState.content || summaryState.isLoading}
+                                    className="flex items-center gap-2 text-sm px-3 py-2 rounded-md transition bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Baixar resumo como arquivo de texto"
+                                >
+                                    <DocumentTextIcon className="w-5 h-5" />
+                                    <span>Exportar Resumo</span>
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={() => setSummaryState(prev => ({ ...prev, isModalOpen: false }))}
+                                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md font-semibold transition text-sm"
+                                >
+                                    Fechar
+                                </button>
+                                <button
+                                    onClick={handleGoToChapterFromSummary}
+                                    disabled={summaryState.chapterIndex === null}
+                                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold transition text-sm disabled:opacity-50"
+                                >
+                                    <span>Ir para Capítulo</span>
+                                    <ChevronRightIcon className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </footer>
                     </div>
-                )}
-            </main>
+                </div>
+            )}
+            {isFocusMode && (
+                <button 
+                    onClick={() => setIsFocusMode(false)}
+                    className="fixed top-4 right-4 z-50 p-2 rounded-full bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 transition"
+                    aria-label="Sair do Modo Focado"
+                >
+                    <ArrowsPointingInIcon className="w-6 h-6" />
+                </button>
+            )}
+            {!isFocusMode && <Footer />}
         </div>
     );
 }
