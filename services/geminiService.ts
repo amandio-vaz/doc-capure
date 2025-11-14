@@ -97,3 +97,36 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
         throw new Error("Não foi possível gerar o áudio para este capítulo.");
     }
 }
+
+export async function generateChapterSummary(chapterTitle: string, chapterContent: string): Promise<string> {
+    try {
+        const prompt = `Você é um assistente de IA especialista em resumir textos técnicos.
+Sua tarefa é criar um resumo conciso e informativo do capítulo de documentação a seguir.
+
+**Título do Capítulo:** "${chapterTitle}"
+
+**Conteúdo do Capítulo:**
+---
+${chapterContent}
+---
+
+**Instruções:**
+1.  Foque nos pontos-chave, conceitos principais e informações essenciais.
+2.  Ignore detalhes triviais ou exemplos de código excessivamente longos.
+3.  O resumo deve ser claro, coeso и de fácil compreensão.
+4.  Retorne o resumo em formato Markdown.
+
+Responda exclusivamente com o resumo em Markdown.`;
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+        });
+        
+        return response.text.trim();
+
+    } catch (error) {
+        console.error("Erro ao gerar resumo do capítulo:", error);
+        throw new Error("Não foi possível gerar o resumo para este capítulo. Tente novamente.");
+    }
+}

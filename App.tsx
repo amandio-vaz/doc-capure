@@ -1,24 +1,18 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Documentation, Chapter, AudioConfig } from './types';
-import { extractDocumentation, generateSpeech } from './services/geminiService';
-import { decodeAudioData, decode } from './utils/audioUtils';
+import { extractDocumentation, generateChapterSummary } from './services/geminiService';
 import { generateAndDownloadMarkdown, generateAndDownloadHtml, generateAndPrint } from './utils/fileUtils';
+import { useAudioPlayer } from './hooks/useAudioPlayer';
 import {
     SparklesIcon, LinkIcon, LoaderIcon, PlayIcon, PauseIcon,
     StopIcon, MarkdownIcon, HtmlIcon, PdfIcon, ChevronLeftIcon, ChevronRightIcon,
-    SearchIcon, SunIcon, MoonIcon
+    SearchIcon, SunIcon, MoonIcon, CopyIcon, CheckIcon, DocumentTextIcon
 } from './components/icons';
 
 declare const showdown: any;
 
-type AudioState = {
-    status: 'idle' | 'loading' | 'playing' | 'paused' | 'error';
-    chapterIndex: number | null;
-    paragraphIndex: number | null;
-    errorMessage?: string;
-}
-
 type Theme = 'light' | 'dark';
+type CopyStatus = 'idle' | 'copied';
 
 const AVAILABLE_VOICES = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'];
 const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5];
@@ -30,9 +24,23 @@ export default function App() {
     const [doc, setDoc] = useState<Documentation | null>(null);
     const [selectedChapterIndex, setSelectedChapterIndex] = useState<number>(0);
     const [currentParagraphIndex, setCurrentParagraphIndex] = useState<number>(0);
-    const [audioState, setAudioState] = useState<AudioState>({ status: 'idle', chapterIndex: null, paragraphIndex: null });
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [playbackProgress, setPlaybackProgress] = useState(0);
+    const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
+    const [summaryState, setSummaryState] = useState<{
+        isLoading: boolean;
+        error: string | null;
+        content: string | null;
+        chapterTitle: string | null;
+        isModalOpen: boolean;
+        chapterIndex: number | null;
+    }>({
+        isLoading: false,
+        error: null,
+        content: null,
+        chapterTitle: null,
+        isModalOpen: false,
+        chapterIndex: null,
+    });
 
     const converter = useRef(new showdown.Converter({
         ghCompatibleHeaderId: true,
@@ -64,6 +72,8 @@ export default function App() {
         return { voice: 'Kore', speed: 1 };
     });
 
+    const { audioState, playbackProgress, toggleAudio, stopAudio } = useAudioPlayer({ audioConfig });
+
     const paragraphs = useMemo(() => {
         if (!doc || !doc.chapters[selectedChapterIndex]) return [];
         return doc.chapters[selectedChapterIndex].content
@@ -87,143 +97,37 @@ export default function App() {
         }
     }, [audioConfig]);
 
-    const audioContextRef = useRef<AudioContext | null>(null);
-    const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
-    const audioBufferRef = useRef<AudioBuffer | null>(null);
-    const playbackProgressRef = useRef<number>(0);
-    const playbackStartTimeRef = useRef<number>(0);
-    const animationFrameRef = useRef<number | null>(null);
     const paragraphRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const autoPlayOnChapterChangeRef = useRef(false);
 
-    const stopCurrentAudio = useCallback((resetState = true) => {
-        if (animationFrameRef.current) {
-            cancelAnimationFrame(animationFrameRef.current);
-            animationFrameRef.current = null;
+    const handleAudioToggle = useCallback(async (chapterIndex: number, paragraphIndex: number) => {
+        const paragraphContent = paragraphs[paragraphIndex];
+        if (paragraphContent) {
+            toggleAudio(paragraphContent, chapterIndex, paragraphIndex);
         }
-        if (audioSourceRef.current) {
-            audioSourceRef.current.onended = null;
-            audioSourceRef.current.stop();
-            audioSourceRef.current.disconnect();
-            audioSourceRef.current = null;
-        }
-        if (resetState) {
-            setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null });
-            setPlaybackProgress(0);
-        }
-    }, []);
+    }, [paragraphs, toggleAudio]);
+
 
     useEffect(() => {
+        stopAudio();
         setCurrentParagraphIndex(0);
-        setPlaybackProgress(0);
-        stopCurrentAudio();
-    }, [selectedChapterIndex, stopCurrentAudio]);
+        
+        if (autoPlayOnChapterChangeRef.current) {
+            const firstParagraph = paragraphs[0];
+            if(firstParagraph) {
+                toggleAudio(firstParagraph, selectedChapterIndex, 0);
+            }
+            autoPlayOnChapterChangeRef.current = false;
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedChapterIndex]);
 
     useEffect(() => {
         paragraphRefs.current[currentParagraphIndex]?.scrollIntoView({
             behavior: 'smooth',
-            block: 'center',
+            block: 'start',
         });
     }, [currentParagraphIndex, paragraphs]);
-
-    const playAudio = useCallback((buffer: AudioBuffer, startTime: number, chapterIndex: number, paragraphIndex: number) => {
-        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const audioContext = audioContextRef.current;
-
-        stopCurrentAudio(false);
-
-        const source = audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.playbackRate.value = audioConfig.speed;
-        source.connect(audioContext.destination);
-
-        const updateProgress = () => {
-            if (!audioContextRef.current || !audioBufferRef.current) return;
-            const elapsedSinceStart = audioContext.currentTime - playbackStartTimeRef.current;
-            const currentPosition = startTime + (elapsedSinceStart * audioConfig.speed);
-            const duration = audioBufferRef.current.duration;
-            const progress = Math.min(100, (currentPosition / duration) * 100);
-            setPlaybackProgress(progress);
-            if (progress < 100) {
-                animationFrameRef.current = requestAnimationFrame(updateProgress);
-            }
-        };
-
-        source.onended = () => {
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current);
-                animationFrameRef.current = null;
-            }
-            setAudioState(prev => {
-                if (prev.status === 'playing' && prev.chapterIndex === chapterIndex && prev.paragraphIndex === paragraphIndex) {
-                    playbackProgressRef.current = 0;
-                    audioBufferRef.current = null;
-                    setPlaybackProgress(0);
-                    return { status: 'idle', chapterIndex: null, paragraphIndex: null };
-                }
-                return prev;
-            });
-        };
-
-        source.start(0, startTime);
-        playbackStartTimeRef.current = audioContext.currentTime;
-        audioSourceRef.current = source;
-        setAudioState({ status: 'playing', chapterIndex, paragraphIndex });
-
-        animationFrameRef.current = requestAnimationFrame(updateProgress);
-    }, [audioConfig.speed, stopCurrentAudio]);
-
-    const handleAudioToggle = useCallback(async (chapterIndex: number, paragraphIndex: number) => {
-        const isCurrentParagraphActive = audioState.chapterIndex === chapterIndex && audioState.paragraphIndex === paragraphIndex;
-
-        if (audioState.status === 'playing' && isCurrentParagraphActive) {
-            if (audioContextRef.current) {
-                const elapsed = audioContextRef.current.currentTime - playbackStartTimeRef.current;
-                playbackProgressRef.current += elapsed * audioConfig.speed;
-            }
-            stopCurrentAudio(false);
-            setAudioState({ status: 'paused', chapterIndex, paragraphIndex });
-            return;
-        }
-
-        if (audioState.status === 'paused' && isCurrentParagraphActive) {
-            if (audioBufferRef.current) {
-                playAudio(audioBufferRef.current, playbackProgressRef.current, chapterIndex, paragraphIndex);
-            }
-            return;
-        }
-
-        stopCurrentAudio(false);
-        playbackProgressRef.current = 0;
-        setPlaybackProgress(0);
-        audioBufferRef.current = null;
-
-        setAudioState({ status: 'loading', chapterIndex, paragraphIndex });
-        
-        try {
-            const paragraphContent = paragraphs[paragraphIndex];
-            if (!paragraphContent) throw new Error("Conteúdo do parágrafo não encontrado.");
-
-            const base64Audio = await generateSpeech(paragraphContent, audioConfig.voice);
-            
-            if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-            }
-            
-            const audioContext = audioContextRef.current;
-            const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
-            
-            audioBufferRef.current = audioBuffer;
-            playAudio(audioBuffer, 0, chapterIndex, paragraphIndex);
-
-        } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : "Erro ao tocar áudio.";
-            setAudioState({ status: 'error', chapterIndex, paragraphIndex, errorMessage });
-            setTimeout(() => setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null }), 5000);
-        }
-
-    }, [paragraphs, audioState, stopCurrentAudio, audioConfig, playAudio]);
 
     const handleNavigateParagraph = (direction: 'next' | 'prev') => {
         const newIndex = direction === 'next' ? currentParagraphIndex + 1 : currentParagraphIndex - 1;
@@ -268,8 +172,51 @@ export default function App() {
         if (format === 'pdf') generateAndPrint(doc);
     };
 
+    const handleCopyToClipboard = () => {
+        if (!doc) return;
+        const markdownContent = `# ${doc.title}\n\n` +
+            doc.chapters.map(chapter => `## ${chapter.title}\n\n${chapter.content}`).join('\n\n---\n\n');
+        
+        navigator.clipboard.writeText(markdownContent).then(() => {
+            setCopyStatus('copied');
+            setTimeout(() => setCopyStatus('idle'), 2000);
+        }).catch(err => {
+            console.error('Falha ao copiar texto: ', err);
+        });
+    };
+
     const toggleTheme = () => {
         setTheme(prevTheme => prevTheme === 'dark' ? 'light' : 'dark');
+    };
+
+    const handleChapterSelect = (index: number) => {
+        if (audioState.status === 'playing') {
+            autoPlayOnChapterChangeRef.current = true;
+        }
+        setSelectedChapterIndex(index);
+    };
+
+    const handleGenerateSummary = async (chapterIndex: number) => {
+        if (!doc) return;
+
+        const chapter = doc.chapters[chapterIndex];
+        
+        setSummaryState({
+            isLoading: true,
+            error: null,
+            content: null,
+            chapterTitle: chapter.title,
+            isModalOpen: true,
+            chapterIndex: chapterIndex,
+        });
+
+        try {
+            const summary = await generateChapterSummary(chapter.title, chapter.content);
+            setSummaryState(prev => ({ ...prev, content: summary, isLoading: false }));
+        } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido ao gerar o resumo.";
+            setSummaryState(prev => ({ ...prev, error: errorMessage, isLoading: false }));
+        }
     };
 
     const filteredChapters = doc?.chapters.filter(chapter =>
@@ -349,6 +296,18 @@ export default function App() {
                         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
                             <h2 className="text-2xl font-bold text-gray-900 dark:text-white text-center md:text-left">{doc.title}</h2>
                             <div className="flex items-center gap-3 flex-wrap justify-center md:justify-end">
+                                <button 
+                                    onClick={handleCopyToClipboard} 
+                                    className={`flex items-center gap-2 text-sm px-3 py-2 rounded-md transition ${
+                                        copyStatus === 'copied' 
+                                        ? 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-200' 
+                                        : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'
+                                    }`} 
+                                    title="Copiar conteúdo em Markdown"
+                                >
+                                    {copyStatus === 'copied' ? <CheckIcon className="w-5 h-5" /> : <CopyIcon className="w-5 h-5" />}
+                                    {copyStatus === 'copied' ? 'Copiado!' : 'Copiar Markdown'}
+                                </button>
                                 <button onClick={() => handleDownload('md')} className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm px-3 py-2 rounded-md transition" title="Baixar arquivo no formato Markdown">
                                     <MarkdownIcon className="w-5 h-5" /> Markdown
                                 </button>
@@ -379,9 +338,21 @@ export default function App() {
                                             filteredChapters.map((chapter) => {
                                                 const originalIndex = doc.chapters.indexOf(chapter);
                                                 return (
-                                                <li key={originalIndex}>
-                                                    <button onClick={() => setSelectedChapterIndex(originalIndex)} className={`w-full text-left p-3 rounded-md text-sm transition ${selectedChapterIndex === originalIndex ? 'bg-indigo-600 text-white font-semibold' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+                                                <li key={originalIndex} className="flex items-center gap-2">
+                                                    <button onClick={() => handleChapterSelect(originalIndex)} className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === originalIndex ? 'bg-indigo-600 text-white font-bold shadow-md' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
                                                         {chapter.title}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleGenerateSummary(originalIndex)}
+                                                        disabled={summaryState.isLoading && summaryState.chapterIndex === originalIndex}
+                                                        className="flex-shrink-0 p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 disabled:opacity-50 disabled:cursor-wait transition"
+                                                        title="Gerar resumo do capítulo"
+                                                    >
+                                                        {summaryState.isLoading && summaryState.chapterIndex === originalIndex ? (
+                                                            <LoaderIcon className="w-5 h-5 animate-spin" />
+                                                        ) : (
+                                                            <DocumentTextIcon className="w-5 h-5" />
+                                                        )}
                                                     </button>
                                                 </li>
                                             )})
@@ -482,12 +453,11 @@ export default function App() {
                                             {paragraphs.map((p, index) => (
                                                 <div
                                                     key={index}
-                                                    // FIX: The ref callback should not return a value. Wrapped in curly braces to ensure a void return type.
                                                     ref={el => { paragraphRefs.current[index] = el; }}
-                                                    className={`transition-all duration-300 rounded-lg p-3 -m-3 ${
+                                                    className={`transition-all duration-300 rounded-xl p-4 -m-4 ${
                                                         index === currentParagraphIndex
-                                                            ? 'bg-indigo-50 dark:bg-gray-700/50 ring-2 ring-indigo-200 dark:ring-indigo-700'
-                                                            : ''
+                                                            ? 'bg-purple-50 dark:bg-purple-900/30 ring-2 ring-purple-300 dark:ring-purple-700'
+                                                            : 'border-2 border-transparent'
                                                     }`}
                                                     dangerouslySetInnerHTML={{ __html: converter.makeHtml(p) }}
                                                 />
@@ -496,6 +466,43 @@ export default function App() {
                                     </>
                                 )}
                             </article>
+                        </div>
+                    </div>
+                )}
+
+                {summaryState.isModalOpen && (
+                    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-200 dark:border-gray-700">
+                            <header className="p-4 border-b border-gray-200 dark:border-gray-600">
+                                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                    Resumo de: <span className="text-indigo-500">{summaryState.chapterTitle}</span>
+                                </h3>
+                            </header>
+                            <main className="p-6 overflow-y-auto custom-scrollbar">
+                                {summaryState.isLoading ? (
+                                    <div className="flex flex-col items-center justify-center text-center text-gray-500 dark:text-gray-400">
+                                        <LoaderIcon className="w-10 h-10 animate-spin text-indigo-500 mb-4" />
+                                        <p>Gerando resumo com IA...</p>
+                                    </div>
+                                ) : summaryState.error ? (
+                                    <div className="bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 p-3 rounded-md border border-red-300 dark:border-red-700">
+                                        <strong>Erro:</strong> {summaryState.error}
+                                    </div>
+                                ) : summaryState.content ? (
+                                    <div
+                                        className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none`}
+                                        dangerouslySetInnerHTML={{ __html: converter.makeHtml(summaryState.content) }}
+                                    />
+                                ) : null}
+                            </main>
+                            <footer className="p-4 border-t border-gray-200 dark:border-gray-600 flex justify-end">
+                                <button
+                                    onClick={() => setSummaryState(prev => ({ ...prev, isModalOpen: false }))}
+                                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md font-semibold transition"
+                                >
+                                    Fechar
+                                </button>
+                            </footer>
                         </div>
                     </div>
                 )}
