@@ -9,6 +9,7 @@ if (!API_KEY) {
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 export async function extractDocumentation(url: string): Promise<Documentation> {
+    let jsonText = ''; // Definido aqui para ser acessível no bloco catch
     try {
         const prompt = `Você é um assistente de IA especialista em web-crawling e processamento de documentação técnica. Sua tarefa é realizar uma varredura completa na documentação a partir da URL fornecida: ${url}.
 
@@ -52,16 +53,23 @@ O JSON final deve seguir esta estrutura hierárquica. Use a propriedade 'subChap
         
         const rawText = response.text;
         
-        // Encontra o início e o fim do objeto JSON principal na resposta.
-        // Isso torna a análise mais robusta contra texto extra que a IA possa adicionar.
-        const startIndex = rawText.indexOf('{');
-        const endIndex = rawText.lastIndexOf('}');
+        // Prioriza encontrar JSON dentro de blocos de código markdown ```json ... ```
+        const markdownMatch = rawText.match(/```(?:json)?\s*(\{[\s\S]+\})\s*```/);
 
-        if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-            throw new Error("A resposta da IA não contém um objeto JSON válido.");
+        if (markdownMatch && markdownMatch[1]) {
+            jsonText = markdownMatch[1];
+        } else {
+            // Fallback para encontrar a primeira e a última chaves
+            const startIndex = rawText.indexOf('{');
+            const endIndex = rawText.lastIndexOf('}');
+
+            if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+                console.error("Resposta completa da IA (não-JSON):", rawText);
+                throw new Error("A resposta da IA não contém um objeto JSON válido.");
+            }
+            jsonText = rawText.substring(startIndex, endIndex + 1);
         }
         
-        const jsonText = rawText.substring(startIndex, endIndex + 1);
         const docData = JSON.parse(jsonText);
 
         if (!docData.title || !Array.isArray(docData.chapters)) {
@@ -72,7 +80,11 @@ O JSON final deve seguir esta estrutura hierárquica. Use a propriedade 'subChap
     } catch (error) {
         console.error("Erro ao extrair documentação:", error);
         if (error instanceof SyntaxError) {
+            console.error("Texto JSON que falhou na análise:", jsonText);
             throw new Error("A resposta da IA não era um JSON válido. Tente novamente.");
+        }
+        if (error instanceof Error && (error.message.includes("JSON válido") || error.message.includes("formato esperado"))) {
+             throw error;
         }
         throw new Error("Não foi possível processar a URL. Verifique o link ou tente novamente mais tarde.");
     }

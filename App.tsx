@@ -3,8 +3,9 @@ import { Documentation, Chapter, AudioConfig } from './types';
 import { extractDocumentation, generateChapterSummary } from './services/geminiService';
 import { generateAndDownloadMarkdown, generateAndDownloadHtml, generateAndPrint, downloadAsFile, generateAndPrintChapter } from './utils/fileUtils';
 import { useAudioPlayer } from './hooks/useAudioPlayer';
+import { AudioPlayerComponent } from './components/AudioPlayer';
 import {
-    SparklesIcon, LinkIcon, LoaderIcon, PlayIcon, PauseIcon,
+    SparklesIcon, LinkIcon, LoaderIcon, PlayIcon,
     StopIcon, MarkdownIcon, HtmlIcon, PdfIcon, ChevronLeftIcon, ChevronRightIcon,
     SearchIcon, SunIcon, MoonIcon, CopyIcon, CheckIcon, DocumentTextIcon,
     ArrowsPointingOutIcon, ArrowsPointingInIcon, AudioIcon, ReplyIcon
@@ -16,7 +17,6 @@ type Theme = 'light' | 'dark';
 type CopyStatus = 'idle' | 'copied';
 
 const AVAILABLE_VOICES = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'];
-const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5];
 
 interface FlattenedChapter {
     chapter: Chapter;
@@ -80,7 +80,7 @@ export default function App() {
             const savedConfig = localStorage.getItem('audioConfig');
             if (savedConfig) {
                 const parsed = JSON.parse(savedConfig);
-                if (AVAILABLE_VOICES.includes(parsed.voice) && PLAYBACK_SPEEDS.includes(parsed.speed)) {
+                if (AVAILABLE_VOICES.includes(parsed.voice)) {
                     return parsed;
                 }
             }
@@ -118,33 +118,34 @@ export default function App() {
             .filter(p => p.length > 0);
     }, [flattenedChapters, selectedChapterIndex]);
 
-    const { audioState, playbackProgress, toggleAudio, stopAudio } = useAudioPlayer({ audioConfig });
+    const {
+        audioState, loadAndPlay, playPause, stopAudio, seekTo,
+        handleVolumeChange, handleMuteToggle, handleSpeedChange
+    } = useAudioPlayer({ audioConfig, setAudioConfig });
 
     const handleStopChapterPlayback = useCallback(() => {
         setChapterPlaybackState('idle');
         stopAudio();
     }, [stopAudio]);
 
-    const handleAudioToggle = useCallback(async (chapterIndex: number, paragraphIndex: number, onEndedCallback?: () => void) => {
+    const handleParagraphPlay = useCallback(async (chapterIndex: number, paragraphIndex: number, onEndedCallback?: () => void) => {
         handleStopChapterPlayback();
         const paragraphContent = paragraphs[paragraphIndex];
+        const chapterTitle = flattenedChapters[chapterIndex]?.chapter.title || '';
         if (paragraphContent) {
-            toggleAudio(paragraphContent, chapterIndex, paragraphIndex, onEndedCallback);
+            loadAndPlay(paragraphContent, chapterIndex, paragraphIndex, onEndedCallback as () => void, chapterTitle);
         }
-    }, [paragraphs, toggleAudio, handleStopChapterPlayback]);
+    }, [paragraphs, flattenedChapters, loadAndPlay, handleStopChapterPlayback]);
 
     const playNextParagraph = useCallback(() => {
         const nextIndex = currentParagraphIndex + 1;
         if (nextIndex < paragraphs.length) {
             setCurrentParagraphIndex(nextIndex);
-            const nextParagraphContent = paragraphs[nextIndex];
-            if (nextParagraphContent) {
-                handleAudioToggle(selectedChapterIndex, nextIndex, playNextParagraph);
-            }
+            handleParagraphPlay(selectedChapterIndex, nextIndex, playNextParagraph);
         } else {
             setChapterPlaybackState('idle');
         }
-    }, [currentParagraphIndex, paragraphs, selectedChapterIndex, handleAudioToggle]);
+    }, [currentParagraphIndex, paragraphs, selectedChapterIndex, handleParagraphPlay]);
 
     useEffect(() => {
         const root = window.document.documentElement;
@@ -162,22 +163,20 @@ export default function App() {
             setCurrentParagraphIndex(newIndex);
             
             if (isAudioActive) {
-                handleAudioToggle(selectedChapterIndex, newIndex);
+                handleParagraphPlay(selectedChapterIndex, newIndex);
             } else {
                 handleStopChapterPlayback();
             }
         }
-    }, [currentParagraphIndex, paragraphs.length, audioState.status, selectedChapterIndex, handleAudioToggle, handleStopChapterPlayback]);
+    }, [currentParagraphIndex, paragraphs.length, audioState.status, selectedChapterIndex, handleParagraphPlay, handleStopChapterPlayback]);
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
-            // Ignora atalhos se o usuário estiver digitando em um campo de texto
             const target = event.target as HTMLElement;
-            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
                 return;
             }
     
-            // Apenas permite atalhos se um documento estiver carregado
             if (!doc) {
                 return;
             }
@@ -196,9 +195,13 @@ export default function App() {
                     event.preventDefault();
                     handleNavigateParagraph('next');
                     break;
-                case ' ': // Barra de espaço
+                case ' ':
                     event.preventDefault();
-                    handleAudioToggle(selectedChapterIndex, currentParagraphIndex);
+                    if(audioState.status === 'idle' || audioState.status === 'error') {
+                        handleParagraphPlay(selectedChapterIndex, currentParagraphIndex);
+                    } else {
+                        playPause();
+                    }
                     break;
                 default:
                     break;
@@ -207,7 +210,7 @@ export default function App() {
     
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [doc, isFocusMode, selectedChapterIndex, currentParagraphIndex, handleNavigateParagraph, handleAudioToggle]);
+    }, [doc, isFocusMode, selectedChapterIndex, currentParagraphIndex, handleNavigateParagraph, handleParagraphPlay, audioState.status, playPause]);
 
     useEffect(() => {
         try {
@@ -229,16 +232,15 @@ export default function App() {
     
         if (chapterPlaybackState === 'playing') {
             setChapterPlaybackState('paused');
-            handleAudioToggle(selectedChapterIndex, currentParagraphIndex);
+            playPause();
         } else {
-            stopAudio(); // Ensure any single paragraph audio is stopped
+            stopAudio();
             setChapterPlaybackState('playing');
             const startIndex = chapterPlaybackState === 'paused' ? currentParagraphIndex : 0;
             if (startIndex === 0 && currentParagraphIndex !== 0) setCurrentParagraphIndex(0);
     
-            const startParagraph = paragraphs[startIndex];
-            if (startParagraph) {
-                handleAudioToggle(selectedChapterIndex, startIndex, playNextParagraph);
+            if (paragraphs[startIndex]) {
+                handleParagraphPlay(selectedChapterIndex, startIndex, playNextParagraph);
             }
         }
     };
@@ -249,10 +251,9 @@ export default function App() {
         setCurrentParagraphIndex(0);
         
         if (autoPlayOnChapterChangeRef.current) {
-            const firstParagraph = paragraphs[0];
-            if(firstParagraph) {
+            if(paragraphs[0]) {
                 setChapterPlaybackState('playing');
-                handleAudioToggle(selectedChapterIndex, 0, playNextParagraph);
+                handleParagraphPlay(selectedChapterIndex, 0, playNextParagraph);
             }
             autoPlayOnChapterChangeRef.current = false;
         }
@@ -377,33 +378,17 @@ export default function App() {
             setSummaryState(prev => ({ ...prev, isModalOpen: false }));
         }
     };
-
-    const handleCopyChapterMarkdown = () => {
-        if (!doc || !flattenedChapters[selectedChapterIndex]) return;
-        const { chapter } = flattenedChapters[selectedChapterIndex];
-        const markdownContent = `## ${chapter.title}\n\n${chapter.content}`;
-        navigator.clipboard.writeText(markdownContent).then(() => {
-            setChapterCopyStatus('copied');
-            setTimeout(() => setChapterCopyStatus('idle'), 2000);
-        }).catch(err => console.error('Falha ao copiar o markdown do capítulo:', err));
-    };
     
-    const handlePrintChapter = () => {
-        if (!doc || !flattenedChapters[selectedChapterIndex]) return;
-        const { chapter } = flattenedChapters[selectedChapterIndex];
-        generateAndPrintChapter(chapter, doc.title);
-    };
-
     const handleGenerateAudioSummary = async () => {
         if (!doc || audioSummaryState.isLoading || chapterPlaybackState !== 'idle' || !flattenedChapters[selectedChapterIndex]) return;
     
-        handleStopChapterPlayback(); // Stop any playback
+        handleStopChapterPlayback(); 
         setAudioSummaryState({ isLoading: true, error: null });
     
         try {
             const { chapter } = flattenedChapters[selectedChapterIndex];
             const summary = await generateChapterSummary(chapter.title, chapter.content);
-            await toggleAudio(summary, selectedChapterIndex, -1); // Use paragraphIndex -1 for summary
+            await loadAndPlay(summary, selectedChapterIndex, -1, () => {}, chapter.title);
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : "Erro desconhecido ao gerar o resumo em áudio.";
             setAudioSummaryState({ isLoading: false, error: errorMessage });
@@ -412,25 +397,23 @@ export default function App() {
         }
     };
 
-    const filteredChapters = useMemo(() => {
-        if (!doc) return [];
-        if (!searchQuery) return flattenedChapters;
-
+    const searchResults = useMemo(() => {
+        if (!doc || !searchQuery) return [];
         const lowerCaseQuery = searchQuery.toLowerCase();
         
-        return flattenedChapters.filter(fc =>
-            fc.chapter.title.toLowerCase().includes(lowerCaseQuery)
-        );
+        return flattenedChapters
+            .filter(fc => fc.chapter.title.toLowerCase().includes(lowerCaseQuery))
+            .map(fc => fc.originalIndex);
     }, [doc, searchQuery, flattenedChapters]);
 
     const renderAudioButtonContent = () => {
-        const isCurrentParagraphActive = audioState.chapterIndex === selectedChapterIndex && audioState.paragraphIndex === currentParagraphIndex;
+        const isCurrentParagraphActive = audioState.trackInfo.chapterIndex === selectedChapterIndex && audioState.trackInfo.paragraphIndex === currentParagraphIndex;
     
         if (isCurrentParagraphActive && audioState.status === 'loading') {
             return <><LoaderIcon className="w-5 h-5 animate-spin" /><span>Gerando...</span></>;
         }
         if (isCurrentParagraphActive && audioState.status === 'playing') {
-            return <><PauseIcon className="w-5 h-5" /><span>Pausar Áudio</span></>;
+            return <><LoaderIcon className="w-5 h-5" /><span>Pausar Áudio</span></>;
         }
         if (isCurrentParagraphActive && audioState.status === 'paused') {
             return <><PlayIcon className="w-5 h-5" /><span>Continuar</span></>;
@@ -486,12 +469,12 @@ export default function App() {
         </footer>
     );
 
-    const isAudioSummaryActive = audioState.paragraphIndex === -1 && audioState.chapterIndex === selectedChapterIndex;
+    const hasActiveAudio = audioState.status !== 'idle';
 
     return (
         <div className="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex flex-col">
             {!isFocusMode && <Header />}
-            <main className={`flex-grow ${isFocusMode ? 'p-0' : 'p-4 md:p-8'}`}>
+            <main className={`flex-grow ${isFocusMode ? 'p-0' : 'p-4 md:p-8'} ${hasActiveAudio && !isFocusMode ? 'pb-32 md:pb-28' : ''}`}>
                 {!doc && <UrlForm />}
                 {isLoading && (
                     <div className="text-center mt-12 flex flex-col items-center">
@@ -547,9 +530,10 @@ export default function App() {
                                             />
                                         </div>
                                         <ul className="space-y-1 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
-                                            {filteredChapters.length > 0 ? (
-                                                filteredChapters.map((item) => {
+                                            {flattenedChapters.length > 0 ? (
+                                                flattenedChapters.map((item) => {
                                                     const { chapter, level, parentIndex, originalIndex } = item;
+                                                    const isSearchResult = searchResults.includes(originalIndex);
                                                     return (
                                                     <li key={originalIndex} className="flex items-center gap-1 group">
                                                         <button 
@@ -558,6 +542,8 @@ export default function App() {
                                                             className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${
                                                                 selectedChapterIndex === originalIndex 
                                                                 ? 'bg-indigo-600 text-white font-bold shadow-md' 
+                                                                : isSearchResult
+                                                                ? 'bg-indigo-100 dark:bg-indigo-900/40 text-gray-800 dark:text-gray-200 hover:bg-indigo-200 dark:hover:bg-indigo-900/60'
                                                                 : 'text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
                                                             }`}
                                                         >
@@ -602,137 +588,50 @@ export default function App() {
                                 {flattenedChapters[selectedChapterIndex] && (
                                     <>
                                         <div className="mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
-                                            <div className="flex justify-between items-start mb-4">
-                                                <h3 className="text-2xl font-bold text-indigo-500 dark:text-indigo-400">{flattenedChapters[selectedChapterIndex].chapter.title}</h3>
-                                                <button
-                                                    onClick={() => setIsFocusMode(true)}
-                                                    className="p-2 -mr-2 -mt-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                    title="Modo Focado"
-                                                    aria-label="Entrar no modo focado"
-                                                >
-                                                    <ArrowsPointingOutIcon className="w-6 h-6" />
-                                                </button>
-                                            </div>
-
-                                            <div className="my-4 p-3 bg-gray-100 dark:bg-gray-900/50 rounded-lg flex flex-wrap items-center justify-center gap-3 border border-gray-200 dark:border-gray-700">
+                                            <div className="flex justify-between items-center mb-4">
+                                                <div className="flex items-center gap-4">
+                                                    <h3 className="text-2xl font-bold text-indigo-500 dark:text-indigo-400">{flattenedChapters[selectedChapterIndex].chapter.title}</h3>
+                                                </div>
                                                 <div className="flex items-center gap-2">
-                                                    <button onClick={handleChapterPlaybackToggle} disabled={isAudioSummaryActive} className="flex items-center gap-2 px-3 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed transition text-sm font-semibold">
-                                                        {chapterPlaybackState === 'playing' ? <PauseIcon className="w-4 h-4" /> : <PlayIcon className="w-4 h-4" />}
-                                                        <span>{chapterPlaybackState === 'playing' ? 'Pausar' : chapterPlaybackState === 'paused' ? 'Continuar' : 'Ouvir Capítulo'}</span>
-                                                    </button>
-                                                    {chapterPlaybackState !== 'idle' && (
-                                                        <button onClick={handleStopChapterPlayback} className="p-2 rounded-md bg-red-600 text-white hover:bg-red-700 transition">
-                                                            <StopIcon className="w-5 h-5" />
+                                                    {!isFocusMode && (
+                                                        <button
+                                                            onClick={() => setIsFocusMode(true)}
+                                                            className="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                            title="Modo Focado"
+                                                            aria-label="Entrar no modo focado"
+                                                        >
+                                                            <ArrowsPointingOutIcon className="w-6 h-6" />
                                                         </button>
                                                     )}
                                                 </div>
-                                                <button onClick={() => handleGenerateSummary(selectedChapterIndex)} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm"><DocumentTextIcon className="w-4 h-4" /> Gerar Resumo</button>
-                                                <button onClick={handleCopyChapterMarkdown} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm">
-                                                    {chapterCopyStatus === 'copied' ? <CheckIcon className="w-4 h-4 text-green-500" /> : <CopyIcon className="w-4 h-4" />} {chapterCopyStatus === 'copied' ? 'Copiado!' : 'Copiar Markdown'}
-                                                </button>
-                                                <button onClick={handlePrintChapter} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm"><PdfIcon className="w-4 h-4" /> Exportar para PDF</button>
-                                                <button onClick={handleGenerateAudioSummary} disabled={audioSummaryState.isLoading || chapterPlaybackState !== 'idle'} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition text-sm disabled:opacity-50 disabled:cursor-wait">
-                                                    {isAudioSummaryActive && audioState.status === 'loading' || audioSummaryState.isLoading ? <LoaderIcon className="w-4 h-4 animate-spin" /> : <AudioIcon className="w-4 h-4" />}
-                                                    <span>{ isAudioSummaryActive ? 'Ouvindo...' : 'Resumo em Áudio'}</span>
-                                                </button>
                                             </div>
-                                            
-                                            {paragraphs.length > 1 && (
-                                                <div className="flex items-center justify-between gap-4 my-4 bg-gray-100 dark:bg-gray-900 p-2 rounded-lg">
-                                                    <button 
-                                                        onClick={() => handleNavigateParagraph('prev')}
-                                                        disabled={currentParagraphIndex === 0}
-                                                        className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
-                                                    >
-                                                        <ChevronLeftIcon className="w-4 h-4"/>
-                                                        <span>Parágrafo Anterior</span>
-                                                    </button>
-                                                    <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
-                                                        Parágrafo {currentParagraphIndex + 1} / {paragraphs.length}
-                                                    </span>
-                                                    <button 
-                                                        onClick={() => handleNavigateParagraph('next')}
-                                                        disabled={currentParagraphIndex === paragraphs.length - 1}
-                                                        className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
-                                                    >
-                                                        <span>Próximo Parágrafo</span>
-                                                        <ChevronRightIcon className="w-4 h-4"/>
-                                                    </button>
-                                                </div>
-                                            )}
 
-                                            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                                            <div className="flex items-center gap-4 mb-4">
                                                 <button 
-                                                  onClick={() => handleAudioToggle(selectedChapterIndex, currentParagraphIndex)} 
-                                                  disabled={audioState.status === 'loading' || chapterPlaybackState !== 'idle'}
-                                                  className="flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-purple-600 hover:bg-purple-700 text-white font-semibold transition disabled:bg-purple-400 disabled:cursor-wait order-1 md:order-none w-[200px]"
+                                                    onClick={() => setSelectedChapterIndex(prev => Math.max(0, prev - 1))}
+                                                    disabled={selectedChapterIndex === 0}
+                                                    className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
                                                 >
-                                                   {renderAudioButtonContent()}
+                                                    <ChevronLeftIcon className="w-4 h-4"/>
+                                                    <span>Anterior</span>
                                                 </button>
-                                                
-                                                <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 order-2 md:order-none">
-                                                    <div className="flex items-center gap-2">
-                                                        <label htmlFor="voice-select" className="text-sm font-medium text-gray-500 dark:text-gray-400">Voz:</label>
-                                                        <select
-                                                            id="voice-select"
-                                                            value={audioConfig.voice}
-                                                            onChange={(e) => setAudioConfig(prev => ({ ...prev, voice: e.target.value }))}
-                                                            className="bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-purple-500 focus:border-purple-500 block p-1.5"
-                                                        >
-                                                            {AVAILABLE_VOICES.map(voice => (
-                                                                <option key={voice} value={voice}>{voice}</option>
-                                                            ))}
-                                                        </select>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Velocidade:</span>
-                                                        <div className="flex items-center bg-gray-200 dark:bg-gray-700 rounded-lg border border-gray-300 dark:border-gray-600">
-                                                            {PLAYBACK_SPEEDS.map(speed => (
-                                                                <button
-                                                                    key={speed}
-                                                                    onClick={() => setAudioConfig(prev => ({ ...prev, speed }))}
-                                                                    className={`px-3 py-1 text-sm transition first:rounded-l-md last:rounded-r-md ${
-                                                                        audioConfig.speed === speed
-                                                                        ? 'bg-purple-600 text-white font-semibold'
-                                                                        : 'hover:bg-gray-300 dark:hover:bg-gray-600'
-                                                                    }`}
-                                                                >
-                                                                    {speed}x
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                </div>
+                                                <button 
+                                                    onClick={() => setSelectedChapterIndex(prev => Math.min(flattenedChapters.length - 1, prev + 1))}
+                                                    disabled={selectedChapterIndex === flattenedChapters.length - 1}
+                                                    className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                                >
+                                                    <span>Próximo</span>
+                                                    <ChevronRightIcon className="w-4 h-4"/>
+                                                </button>
                                             </div>
-                                            {(audioState.status === 'playing' || audioState.status === 'paused') && audioState.chapterIndex === selectedChapterIndex && (
-                                                <div className="mt-4 w-full">
-                                                    <div className="bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                                                        <div 
-                                                            className="bg-purple-600 h-2 rounded-full transition-all duration-100" 
-                                                            style={{ width: `${playbackProgress}%` }}
-                                                        ></div>
-                                                    </div>
-                                                    {isAudioSummaryActive && <p className="text-sm text-center text-purple-600 dark:text-purple-400 mt-2 font-medium">Ouvindo resumo do capítulo...</p>}
-                                                </div>
-                                            )}
-                                        </div>
-                                        
-                                        {audioState.status === 'error' && audioState.chapterIndex === selectedChapterIndex && <div className="mb-4 p-2 text-sm bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 rounded border border-red-300 dark:border-red-700">{audioState.errorMessage}</div>}
-                                        
-                                        <div className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:rounded-md prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-gray-600 prose-img:rounded-md`}>
-                                            <div className={`${isFocusMode ? 'max-w-3xl mx-auto' : ''}`}>
-                                                {paragraphs.map((p, index) => (
+
+                                            <div className={`prose ${theme === 'dark' ? 'prose-invert' : ''} max-w-none prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900 prose-pre:rounded-md prose-pre:border prose-pre:border-gray-200 dark:prose-pre:border-gray-600 prose-img:rounded-md`}>
+                                                <div className={`${isFocusMode ? 'max-w-3xl mx-auto py-8' : ''}`}>
                                                     <div
-                                                        key={index}
-                                                        ref={el => { paragraphRefs.current[index] = el; }}
-                                                        className={`select-text transition-all duration-300 rounded-xl p-4 -m-4 ${
-                                                            index === currentParagraphIndex
-                                                                ? 'bg-purple-50 dark:bg-purple-900/30 ring-2 ring-purple-300 dark:ring-purple-700'
-                                                                : 'border-2 border-transparent'
-                                                        }`}
-                                                        dangerouslySetInnerHTML={{ __html: converter.makeHtml(p) }}
+                                                        className="select-text"
+                                                        dangerouslySetInnerHTML={{ __html: converter.makeHtml(flattenedChapters[selectedChapterIndex].chapter.content) }}
                                                     />
-                                                ))}
+                                                </div>
                                             </div>
                                         </div>
                                     </>
@@ -821,6 +720,17 @@ export default function App() {
                     <ArrowsPointingInIcon className="w-6 h-6" />
                 </button>
             )}
+            <AudioPlayerComponent
+                audioState={audioState}
+                onPlayPause={playPause}
+                onStop={stopAudio}
+                onSeek={seekTo}
+                onVolumeChange={handleVolumeChange}
+                onMuteToggle={handleMuteToggle}
+                onSpeedChange={handleSpeedChange}
+                onNext={() => {}}
+                onPrevious={() => {}}
+            />
             {!isFocusMode && <Footer />}
         </div>
     );

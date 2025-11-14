@@ -3,178 +3,226 @@ import { generateSpeech } from '../services/geminiService';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { AudioConfig } from '../types';
 
-type AudioState = {
-    status: 'idle' | 'loading' | 'playing' | 'paused' | 'error';
-    chapterIndex: number | null;
-    paragraphIndex: number | null;
+type AudioStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
+
+export type AudioState = {
+    status: AudioStatus;
+    trackInfo: {
+        chapterIndex: number | null;
+        paragraphIndex: number | null;
+        chapterTitle?: string;
+        paragraphContent?: string;
+    },
+    currentTime: number;
+    duration: number;
+    volume: number;
+    isMuted: boolean;
+    speed: number;
     errorMessage?: string;
 };
 
 type UseAudioPlayerProps = {
   audioConfig: AudioConfig;
+  setAudioConfig: React.Dispatch<React.SetStateAction<AudioConfig>>;
 };
 
-type ToggleAudio = (
-    text: string,
-    chapterIndex: number,
-    paragraphIndex: number,
-    onEndedCallback?: () => void
-) => Promise<void>;
-
-
-export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
-    const [audioState, setAudioState] = useState<AudioState>({ status: 'idle', chapterIndex: null, paragraphIndex: null });
-    const [playbackProgress, setPlaybackProgress] = useState(0);
+export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerProps) {
+    const [audioState, setAudioState] = useState<AudioState>({
+        status: 'idle',
+        trackInfo: { chapterIndex: null, paragraphIndex: null },
+        currentTime: 0,
+        duration: 0,
+        volume: 1,
+        isMuted: false,
+        speed: audioConfig.speed,
+        errorMessage: undefined,
+    });
 
     const audioContextRef = useRef<AudioContext | null>(null);
     const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+    const gainNodeRef = useRef<GainNode | null>(null);
     const audioBufferRef = useRef<AudioBuffer | null>(null);
-    const playbackProgressRef = useRef<number>(0);
-    const playbackStartTimeRef = useRef<number>(0);
+    
+    const playbackStartedAtRef = useRef<number>(0); // When playback started/resumed (in AudioContext time)
+    const playbackPausedAtRef = useRef<number>(0); // Where playback was paused (in seconds)
+    
     const animationFrameRef = useRef<number | null>(null);
     const generationIdRef = useRef(0);
     const onEndedCallbackRef = useRef<(() => void) | null>(null);
 
-
-    const stopAudio = useCallback((resetState = true) => {
+    const stop = useCallback((resetFullState = true) => {
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
             animationFrameRef.current = null;
         }
         if (audioSourceRef.current) {
             audioSourceRef.current.onended = null;
-            audioSourceRef.current.stop();
+            try {
+                audioSourceRef.current.stop();
+            } catch (e) { /* Ignore if already stopped */ }
             audioSourceRef.current.disconnect();
             audioSourceRef.current = null;
         }
-        if (resetState) {
-            setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null });
-            setPlaybackProgress(0);
-            playbackProgressRef.current = 0;
+        if (resetFullState) {
+            setAudioState(prev => ({ ...prev, status: 'idle', trackInfo: { chapterIndex: null, paragraphIndex: null }, currentTime: 0, duration: 0 }));
             audioBufferRef.current = null;
+            playbackPausedAtRef.current = 0;
         }
     }, []);
 
-    const playInternal = useCallback((buffer: AudioBuffer, startTime: number, chapterIndex: number, paragraphIndex: number) => {
+    const play = useCallback((startTime = 0) => {
+        if (!audioBufferRef.current) return;
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
             audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         }
-        const audioContext = audioContextRef.current;
+        if (!gainNodeRef.current || gainNodeRef.current.context.state === 'closed') {
+            gainNodeRef.current = audioContextRef.current.createGain();
+            gainNodeRef.current.connect(audioContextRef.current.destination);
+        }
+        
+        stop(false); // Stop any existing playback before starting a new one
 
-        stopAudio(false);
-
-        const source = audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.playbackRate.value = audioConfig.speed;
-        source.connect(audioContext.destination);
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBufferRef.current;
+        source.playbackRate.value = audioState.speed;
+        source.connect(gainNodeRef.current);
 
         const updateProgress = () => {
-            if (!audioContextRef.current || !audioBufferRef.current) return;
-            const elapsedSinceStart = audioContext.currentTime - playbackStartTimeRef.current;
-            const currentPosition = startTime + (elapsedSinceStart * audioConfig.speed);
-            const duration = audioBufferRef.current.duration;
-            const progress = Math.min(100, (currentPosition / duration) * 100);
-            setPlaybackProgress(progress);
-            if (progress < 100) {
+            if (!audioContextRef.current || audioSourceRef.current?.context.state !== 'running') return;
+            
+            const elapsed = audioContextRef.current.currentTime - playbackStartedAtRef.current;
+            const newCurrentTime = playbackPausedAtRef.current + (elapsed * audioState.speed);
+            
+            setAudioState(prev => ({...prev, currentTime: newCurrentTime }));
+            
+            if (newCurrentTime < (audioState.duration || 0)) {
                 animationFrameRef.current = requestAnimationFrame(updateProgress);
             }
         };
-        
+
         source.onended = () => {
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current);
-                animationFrameRef.current = null;
-            }
-            
-            stopAudio(true);
-            
-            if (onEndedCallbackRef.current) {
-                onEndedCallbackRef.current();
+            if (audioSourceRef.current === source) {
+                const wasPlaying = audioState.status === 'playing';
+                const reachedEnd = Math.abs(audioState.currentTime - audioState.duration) < 0.1;
+                stop(true);
+                if (wasPlaying && reachedEnd && onEndedCallbackRef.current) {
+                    onEndedCallbackRef.current();
+                }
             }
         };
-
+        
+        gainNodeRef.current.gain.setValueAtTime(audioState.isMuted ? 0 : audioState.volume, audioContextRef.current.currentTime);
         source.start(0, startTime);
-        playbackStartTimeRef.current = audioContext.currentTime;
+        
+        playbackStartedAtRef.current = audioContextRef.current.currentTime;
+        playbackPausedAtRef.current = startTime;
         audioSourceRef.current = source;
-        setAudioState({ status: 'playing', chapterIndex, paragraphIndex });
+        setAudioState(prev => ({ ...prev, status: 'playing' }));
         animationFrameRef.current = requestAnimationFrame(updateProgress);
 
-    }, [audioConfig.speed, stopAudio]);
+    }, [stop, audioState.speed, audioState.volume, audioState.isMuted, audioState.status, audioState.currentTime, audioState.duration]);
 
-    const toggleAudio: ToggleAudio = useCallback(async (text, chapterIndex, paragraphIndex, onEndedCallback) => {
-        onEndedCallbackRef.current = onEndedCallback || null;
-        const isCurrentParagraphActive = audioState.chapterIndex === chapterIndex && audioState.paragraphIndex === paragraphIndex;
+    const pause = useCallback(() => {
+        if (!audioContextRef.current) return;
+        const elapsed = audioContextRef.current.currentTime - playbackStartedAtRef.current;
+        playbackPausedAtRef.current += elapsed * audioState.speed;
+        stop(false);
+        setAudioState(prev => ({...prev, status: 'paused' }));
+    }, [stop, audioState.speed]);
 
-        if (audioState.status === 'playing' && isCurrentParagraphActive) {
-            if (audioContextRef.current) {
-                const elapsed = audioContextRef.current.currentTime - playbackStartTimeRef.current;
-                playbackProgressRef.current += elapsed * audioConfig.speed;
-            }
-            stopAudio(false);
-            setAudioState({ status: 'paused', chapterIndex, paragraphIndex });
-            return;
+    const playPause = useCallback(() => {
+        if (audioState.status === 'playing') {
+            pause();
+        } else if (audioState.status === 'paused') {
+            play(playbackPausedAtRef.current);
         }
+    }, [audioState.status, pause, play]);
 
-        if (audioState.status === 'paused' && isCurrentParagraphActive) {
-            if (audioBufferRef.current) {
-                playInternal(audioBufferRef.current, playbackProgressRef.current, chapterIndex, paragraphIndex);
-            }
-            return;
-        }
-
-        stopAudio(false);
-        playbackProgressRef.current = 0;
-        setPlaybackProgress(0);
-        audioBufferRef.current = null;
-
+    const loadAndPlay = useCallback(async (text: string, chapterIndex: number, paragraphIndex: number, onEnded: () => void, chapterTitle: string) => {
+        onEndedCallbackRef.current = onEnded;
         const currentGenerationId = ++generationIdRef.current;
-        setAudioState({ status: 'loading', chapterIndex, paragraphIndex });
         
-        try {
-            if (!text) throw new Error("Conteúdo do parágrafo não encontrado.");
+        stop(true);
+        setAudioState(prev => ({ ...prev, status: 'loading', trackInfo: { chapterIndex, paragraphIndex, chapterTitle, paragraphContent: text } }));
 
+        try {
             const base64Audio = await generateSpeech(text, audioConfig.voice);
-            
-            if (currentGenerationId !== generationIdRef.current) {
-                return;
-            }
-            
+            if (currentGenerationId !== generationIdRef.current) return;
+
             if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
                 audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
             }
-            
-            const audioContext = audioContextRef.current;
-            const audioBuffer = await decodeAudioData(decode(base64Audio), audioContext, 24000, 1);
+            const buffer = await decodeAudioData(decode(base64Audio), audioContextRef.current, 24000, 1);
+            if (currentGenerationId !== generationIdRef.current) return;
 
-            if (currentGenerationId !== generationIdRef.current) {
-                return;
-            }
-            
-            audioBufferRef.current = audioBuffer;
-            playInternal(audioBuffer, 0, chapterIndex, paragraphIndex);
+            audioBufferRef.current = buffer;
+            setAudioState(prev => ({ ...prev, duration: buffer.duration }));
+            play(0);
 
         } catch (err) {
             if (currentGenerationId === generationIdRef.current) {
-                const errorMessage = err instanceof Error ? err.message : "Erro ao tocar áudio.";
-                setAudioState({ status: 'error', chapterIndex, paragraphIndex, errorMessage });
-                setTimeout(() => setAudioState({ status: 'idle', chapterIndex: null, paragraphIndex: null }), 5000);
+                const message = err instanceof Error ? err.message : "Erro ao carregar áudio.";
+                setAudioState(prev => ({ ...prev, status: 'error', errorMessage: message }));
             }
         }
-    }, [audioState, stopAudio, audioConfig.voice, audioConfig.speed, playInternal]);
+    }, [stop, audioConfig.voice, play]);
+
+    const seekTo = useCallback((time: number) => {
+        if (audioBufferRef.current) {
+            const wasPlaying = audioState.status === 'playing';
+            playbackPausedAtRef.current = time;
+            setAudioState(prev => ({ ...prev, currentTime: time }));
+            if (wasPlaying) {
+                play(time);
+            }
+        }
+    }, [audioState.status, play]);
+
+    const handleVolumeChange = useCallback((newVolume: number) => {
+        setAudioState(prev => ({ ...prev, volume: newVolume, isMuted: newVolume === 0 }));
+        if (gainNodeRef.current && audioContextRef.current) {
+            gainNodeRef.current.gain.setValueAtTime(newVolume, audioContextRef.current.currentTime);
+        }
+    }, []);
+
+    const handleMuteToggle = useCallback(() => {
+        const newMutedState = !audioState.isMuted;
+        setAudioState(prev => ({ ...prev, isMuted: newMutedState }));
+        if (gainNodeRef.current && audioContextRef.current) {
+            const newVolume = newMutedState ? 0 : audioState.volume;
+            gainNodeRef.current.gain.setValueAtTime(newVolume, audioContextRef.current.currentTime);
+        }
+    }, [audioState.isMuted, audioState.volume]);
+
+    const handleSpeedChange = useCallback((newSpeed: number) => {
+        setAudioConfig(prev => ({ ...prev, speed: newSpeed }));
+        setAudioState(prev => ({ ...prev, speed: newSpeed }));
+        if (audioSourceRef.current) {
+            audioSourceRef.current.playbackRate.value = newSpeed;
+        }
+    }, [setAudioConfig]);
+    
+    useEffect(() => {
+      setAudioState(prev => ({...prev, speed: audioConfig.speed}));
+    }, [audioConfig.speed])
 
     useEffect(() => {
         return () => {
-            stopAudio();
+            stop(true);
             if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-                audioContextRef.current.close();
+                audioContextRef.current.close().catch(console.error);
             }
         };
-    }, [stopAudio]);
+    }, [stop]);
 
     return {
         audioState,
-        playbackProgress,
-        toggleAudio,
-        stopAudio,
+        loadAndPlay,
+        playPause,
+        stopAudio: stop,
+        seekTo,
+        handleVolumeChange,
+        handleMuteToggle,
+        handleSpeedChange,
     };
 }
