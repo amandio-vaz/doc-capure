@@ -38,22 +38,19 @@ Responda exclusivamente com o objeto JSON. Sua resposta deve ser apenas o JSON, 
             },
         });
         
-        let jsonText = response.text.trim();
+        const rawText = response.text;
         
-        // Handle cases where the response might be wrapped in ```json ... ```
-        if (jsonText.startsWith('```json')) {
-            jsonText = jsonText.slice(7);
-            if (jsonText.endsWith('```')) {
-                jsonText = jsonText.slice(0, -3);
-            }
-        } else if (jsonText.startsWith('```')) {
-            jsonText = jsonText.slice(3);
-            if (jsonText.endsWith('```')) {
-                jsonText = jsonText.slice(0, -3);
-            }
-        }
+        // Encontra o início e o fim do objeto JSON principal na resposta.
+        // Isso torna a análise mais robusta contra texto extra que a IA possa adicionar.
+        const startIndex = rawText.indexOf('{');
+        const endIndex = rawText.lastIndexOf('}');
 
-        const docData = JSON.parse(jsonText.trim());
+        if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+            throw new Error("A resposta da IA não contém um objeto JSON válido.");
+        }
+        
+        const jsonText = rawText.substring(startIndex, endIndex + 1);
+        const docData = JSON.parse(jsonText);
 
         if (!docData.title || !Array.isArray(docData.chapters)) {
           throw new Error("A resposta da IA não está no formato esperado.");

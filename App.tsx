@@ -33,6 +33,7 @@ export default function App() {
         chapterTitle: string | null;
         isModalOpen: boolean;
         chapterIndex: number | null;
+        summaryCopyStatus: 'idle' | 'copied';
     }>({
         isLoading: false,
         error: null,
@@ -40,6 +41,7 @@ export default function App() {
         chapterTitle: null,
         isModalOpen: false,
         chapterIndex: null,
+        summaryCopyStatus: 'idle',
     });
 
     const converter = useRef(new showdown.Converter({
@@ -208,6 +210,7 @@ export default function App() {
             chapterTitle: chapter.title,
             isModalOpen: true,
             chapterIndex: chapterIndex,
+            summaryCopyStatus: 'idle',
         });
 
         try {
@@ -216,6 +219,30 @@ export default function App() {
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido ao gerar o resumo.";
             setSummaryState(prev => ({ ...prev, error: errorMessage, isLoading: false }));
+        }
+    };
+
+    const handleCopySummary = () => {
+        if (!summaryState.content) return;
+        navigator.clipboard.writeText(summaryState.content).then(() => {
+            setSummaryState(prev => ({ ...prev, summaryCopyStatus: 'copied' }));
+            setTimeout(() => {
+                setSummaryState(prev => {
+                    if (prev.isModalOpen) {
+                        return { ...prev, summaryCopyStatus: 'idle' };
+                    }
+                    return prev;
+                });
+            }, 2000);
+        }).catch(err => {
+            console.error('Falha ao copiar o resumo: ', err);
+        });
+    };
+
+    const handleGoToChapterFromSummary = () => {
+        if (summaryState.chapterIndex !== null) {
+            handleChapterSelect(summaryState.chapterIndex);
+            setSummaryState(prev => ({ ...prev, isModalOpen: false }));
         }
     };
 
@@ -495,13 +522,35 @@ export default function App() {
                                     />
                                 ) : null}
                             </main>
-                            <footer className="p-4 border-t border-gray-200 dark:border-gray-600 flex justify-end">
+                            <footer className="p-4 border-t border-gray-200 dark:border-gray-600 flex justify-between items-center">
                                 <button
-                                    onClick={() => setSummaryState(prev => ({ ...prev, isModalOpen: false }))}
-                                    className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md font-semibold transition"
+                                    onClick={handleCopySummary}
+                                    disabled={!summaryState.content || summaryState.isLoading}
+                                    className={`flex items-center gap-2 text-sm px-3 py-2 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                        summaryState.summaryCopyStatus === 'copied'
+                                        ? 'bg-green-100 dark:bg-green-800 text-green-700 dark:text-green-200'
+                                        : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'
+                                    }`}
                                 >
-                                    Fechar
+                                    {summaryState.summaryCopyStatus === 'copied' ? <CheckIcon className="w-5 h-5" /> : <CopyIcon className="w-5 h-5" />}
+                                    <span>{summaryState.summaryCopyStatus === 'copied' ? 'Copiado!' : 'Copiar Resumo'}</span>
                                 </button>
+                                <div className="flex items-center gap-3">
+                                    <button
+                                        onClick={() => setSummaryState(prev => ({ ...prev, isModalOpen: false }))}
+                                        className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-md font-semibold transition text-sm"
+                                    >
+                                        Fechar
+                                    </button>
+                                    <button
+                                        onClick={handleGoToChapterFromSummary}
+                                        disabled={summaryState.chapterIndex === null}
+                                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold transition text-sm disabled:opacity-50"
+                                    >
+                                        <span>Ir para Capítulo</span>
+                                        <ChevronRightIcon className="w-4 h-4" />
+                                    </button>
+                                </div>
                             </footer>
                         </div>
                     </div>
