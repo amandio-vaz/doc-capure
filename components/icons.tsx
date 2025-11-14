@@ -61,18 +61,6 @@ export const SearchIcon = ({ className = 'w-6 h-6' }: { className?: string }) =>
     </svg>
 );
 
-export const SunIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
-    </svg>
-);
-
-export const MoonIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
-    </svg>
-);
-
 export const ChevronLeftIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -131,4 +119,33 @@ export const VolumeOffIcon = ({ className = 'w-6 h-6' }: { className?: string })
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
     </svg>
+);
+
+export const UploadCloudIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 12v9" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l-3-3-3 3" />
+  </svg>
+);
+
+export const XCircleIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+export const FileIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m-1.5 0V3.75c0-.621.504-1.125 1.125-1.125h9.75c.621 0 1.125.504 1.125 1.125v3.375" />
+  </svg>
+);
+
+export const WordIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+    <svg className={className} stroke="currentColor" fill="currentColor" strokeWidth="0" viewBox="0 0 48 48" enableBackground="new 0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path fill="#285C9A" d="M42.5,42H5.5C4.1,42,3,40.9,3,39.5V8.5C3,7.1,4.1,6,5.5,6h24.1L45,16.4V39.5C45,40.9,43.9,42,42.5,42z"></path><path fill="#fff" d="M31.3,18H31c-0.6,0-1,0.4-1,1v5h-2v-5c0-0.6-0.4-1-1-1h-0.3c-0.6,0-1,0.4-1,1v5h-2v-5c0-0.6-0.4-1-1-1h-0.3 c-0.6,0-1,0.4-1,1v5h-2v-5c0-0.6-0.4-1-1-1h-0.3c-0.6,0-1,0.4-1,1v5h-2v-6c0-1.7,1.3-3,3-3h1.5c0.4,0,0.8,0.2,1.1,0.5l1.9,2.5l1.9-2.5 c0.3-0.3,0.7-0.5,1.1-0.5H30c1.7,0,3,1.3,3,3v6h-2v-5C32,18.4,31.6,18,31.3,18z"></path><path fill="#1A437C" d="M29.6,6H5.5C4.1,6,3,7.1,3,8.5v3.6C3,11.3,3.7,11,4.5,11h39c0.8,0,1.5,0.3,1.5,1.1V17l-12-11H29.6z"></path><g fill="#fff"><path d="M29.9,6.2V16c0,0.8,0.7,1.5,1.5,1.5H44L29.9,6.2z"></path></g></svg>
+);
+
+export const StarIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 21.1a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+  </svg>
 );

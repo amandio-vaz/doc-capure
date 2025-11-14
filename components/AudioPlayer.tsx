@@ -51,6 +51,14 @@ export function AudioPlayerComponent({
     const isPlaying = status === 'playing';
     const isLoading = status === 'loading';
     const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+    
+    const getTrackDescription = () => {
+        if (!trackInfo.chapterTitle) return '';
+        if (trackInfo.chapterTitle.startsWith('Resumo:')) {
+            return 'Ouvindo resumo do tópico';
+        }
+        return 'Ouvindo tópico completo';
+    };
 
     return (
         <div className="fixed bottom-0 left-0 right-0 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border-t border-gray-200 dark:border-gray-700 z-40 p-3 shadow-lg-top">
@@ -78,7 +86,7 @@ export function AudioPlayerComponent({
                             {trackInfo.chapterTitle || 'Carregando...'}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                            {trackInfo.paragraphContent ? 'Ouvindo parágrafo' : 'Ouvindo resumo do capítulo'}
+                            {getTrackDescription()}
                         </p>
                     </div>
 

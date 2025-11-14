@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+// FIX: Import React to resolve 'Cannot find namespace React' error.
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { generateSpeech } from '../services/geminiService';
 import { decode, decodeAudioData } from '../utils/audioUtils';
 import { AudioConfig } from '../types';

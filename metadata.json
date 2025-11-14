@@ -1,5 +1,5 @@
 {
-  "name": "GPS AI - AleisterCrawlerDocs",
-  "description": "Uma aplicação de IA que transforma documentações técnicas online em formatos estruturados (HTML, Markdown) e gera resumos em áudio para cada seção. Apenas forneça uma URL para começar.",
+  "name": "CortexPrepExam - Gerador de Plano de Estudo IA",
+  "description": "Uma aplicação de IA que cria planos de estudo detalhados para exames de certificação. Faça upload de seus materiais, forneça o código do exame e receba um guia de estudo estruturado e enriquecido.",
   "requestFramePermissions": []
 }
