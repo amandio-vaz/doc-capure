@@ -1,7 +1,7 @@
-
 export interface Chapter {
   title: string;
   content: string; // Markdown content
+  subChapters?: Chapter[];
 }
 
 export interface Documentation {

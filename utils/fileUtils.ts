@@ -124,3 +124,60 @@ export function generateAndPrint(doc: Documentation) {
         }, 500);
     }
 }
+
+function createSingleChapterHtmlContent(chapter: Chapter, docTitle: string): string {
+    const markdownContent = `<h1>${docTitle}</h1>\n\n## ${chapter.title}\n\n${chapter.content}`;
+
+    return `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${chapter.title} - ${docTitle}</title>
+    <script src="https://cdn.jsdelivr.net/npm/showdown/dist/showdown.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 2rem; }
+        #content { max-width: 800px; margin: 0 auto; }
+        h1 { color: #111; font-size: 1.2rem; margin-bottom: 0; }
+        h2 { color: #111; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+        code { background-color: #f4f4f4; padding: 0.2em 0.4em; border-radius: 6px; font-family: 'Courier New', Courier, monospace; font-size: 85%; }
+        pre { background-color: #f4f4f4; border: 1px solid #ddd; border-radius: 8px; padding: 1em; overflow-x: auto; }
+        pre code { background-color: transparent; padding: 0; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        blockquote { border-left: 4px solid #ccc; padding-left: 1em; color: #555; margin-left: 0; }
+        @media print {
+            body { padding: 1rem; color: #000; }
+        }
+    </style>
+</head>
+<body>
+    <div id="content"></div>
+    <textarea id="markdown" style="display:none;">${markdownContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}
+    </textarea>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var converter = new showdown.Converter({ ghCompatibleHeaderId: true, simpleLineBreaks: true, tables: true });
+            var text = document.getElementById('markdown').value;
+            var html = converter.makeHtml(text);
+            document.getElementById('content').innerHTML = html;
+        });
+    </script>
+</body>
+</html>
+    `;
+}
+
+export function generateAndPrintChapter(chapter: Chapter, docTitle: string) {
+    const htmlContent = createSingleChapterHtmlContent(chapter, docTitle);
+    const printWindow = window.open('', '_blank');
+    if(printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+            printWindow.print();
+        }, 500);
+    }
+}

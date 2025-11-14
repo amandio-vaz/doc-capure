@@ -10,29 +10,36 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 export async function extractDocumentation(url: string): Promise<Documentation> {
     try {
-        const prompt = `Você é um assistente de IA especialista em web-crawling e processamento de documentação técnica. Sua tarefa é realizar uma varredura completa na documentação a partir da URL inicial fornecida: ${url}.
+        const prompt = `Você é um assistente de IA especialista em web-crawling e processamento de documentação técnica. Sua tarefa é realizar uma varredura completa na documentação a partir da URL fornecida: ${url}.
 
 **Processo:**
 1.  **Análise Inicial:** Comece na URL inicial e identifique a estrutura de navegação principal da documentação (ex: menu lateral, índice de capítulos, links de "próxima página").
-2.  **Rastreamento (Crawling):** Siga os links de navegação de forma recursiva para descobrir todos os tópicos e subtópicos da documentação. Mantenha-se dentro do escopo da documentação principal, evitando links externos como blogs, fóruns ou páginas de marketing.
-3.  **Extração de Conteúdo:** Para cada página relevante que você visitar, extraia o conteúdo principal, focando no texto técnico, exemplos de código e explicações. Ignore elementos repetitivos como cabeçalhos, rodapés, menus e anúncios.
-4.  **Estruturação Final:** Consolide todo o conteúdo extraído em um único objeto JSON. Organize o conteúdo em capítulos lógicos, respeitando a hierarquia encontrada no site (tópicos principais como capítulos, subtópicos como seções dentro do conteúdo do capítulo).
+2.  **Rastreamento (Crawling):** Siga os links de navegação de forma recursiva para descobrir todos os tópicos e subtópicos da documentação. Mantenha-se dentro do escopo da documentação principal, evitando links externos.
+3.  **Extração de Conteúdo:** Para cada página relevante, extraia o conteúdo principal. Sua principal responsabilidade é extrair o conteúdo de forma **integral e literal**.
+4.  **Estruturação Final:** Consolide todo o conteúdo extraído em um único objeto JSON. A estrutura de capítulos e subtópicos no JSON final deve espelhar a estrutura original da documentação o mais fielmente possível.
 
 **Formato de Saída (JSON):**
-O JSON final deve seguir esta estrutura:
+O JSON final deve seguir esta estrutura hierárquica. Use a propriedade 'subChapters' para aninhar tópicos.
 {
   "title": "O título principal e geral de toda a documentação.",
   "chapters": [
     {
-      "title": "O título do capítulo/seção principal.",
-      "content": "O conteúdo completo e consolidado deste capítulo, em formato Markdown. Preserve a formatação, blocos de código, listas e links."
+      "title": "O título do capítulo principal.",
+      "content": "O conteúdo completo e consolidado deste capítulo, em formato Markdown.",
+      "subChapters": [
+        {
+          "title": "O título do subtópico/capítulo aninhado.",
+          "content": "O conteúdo deste subtópico.",
+          "subChapters": []
+        }
+      ]
     }
   ]
 }
 
-**Instruções Importantes:**
-- Use a ferramenta de busca do Google para acessar o conteúdo das páginas.
-- Combine seções curtas e relacionadas em capítulos maiores e mais coesos, se fizer sentido.
+**Instruções Críticas:**
+- **NÃO RESUMA, NÃO ABREVIE E NÃO OMITA NENHUMA PARTE DO CONTEÚDO TÉCNICO.**
+- O campo 'content' de cada capítulo deve conter o texto **exato** encontrado na página, incluindo todos os parágrafos, listas, tabelas e, crucialmente, **todos os blocos de código completos**.
 - A sua resposta final deve ser **exclusivamente** o objeto JSON completo. Não inclua texto explicativo, comentários ou blocos de código markdown (\`\`\`) envolvendo o JSON.`;
 
         const response = await ai.models.generateContent({
@@ -78,7 +85,7 @@ export async function generateSpeech(text: string, voice: string): Promise<strin
         }
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text: `Leia o seguinte texto de forma clara e profissional: ${text}` }] }],
+            contents: [{ parts: [{ text: text }] }],
             config: {
                 responseModalities: [Modality.AUDIO],
                 speechConfig: {

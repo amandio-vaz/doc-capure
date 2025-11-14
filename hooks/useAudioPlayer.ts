@@ -14,6 +14,14 @@ type UseAudioPlayerProps = {
   audioConfig: AudioConfig;
 };
 
+type ToggleAudio = (
+    text: string,
+    chapterIndex: number,
+    paragraphIndex: number,
+    onEndedCallback?: () => void
+) => Promise<void>;
+
+
 export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
     const [audioState, setAudioState] = useState<AudioState>({ status: 'idle', chapterIndex: null, paragraphIndex: null });
     const [playbackProgress, setPlaybackProgress] = useState(0);
@@ -25,6 +33,8 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
     const playbackStartTimeRef = useRef<number>(0);
     const animationFrameRef = useRef<number | null>(null);
     const generationIdRef = useRef(0);
+    const onEndedCallbackRef = useRef<(() => void) | null>(null);
+
 
     const stopAudio = useCallback((resetState = true) => {
         if (animationFrameRef.current) {
@@ -75,13 +85,12 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
                 cancelAnimationFrame(animationFrameRef.current);
                 animationFrameRef.current = null;
             }
-            setAudioState(prev => {
-                if (prev.status === 'playing' && prev.chapterIndex === chapterIndex && prev.paragraphIndex === paragraphIndex) {
-                    stopAudio(true);
-                    return { status: 'idle', chapterIndex: null, paragraphIndex: null };
-                }
-                return prev;
-            });
+            
+            stopAudio(true);
+            
+            if (onEndedCallbackRef.current) {
+                onEndedCallbackRef.current();
+            }
         };
 
         source.start(0, startTime);
@@ -92,7 +101,8 @@ export function useAudioPlayer({ audioConfig }: UseAudioPlayerProps) {
 
     }, [audioConfig.speed, stopAudio]);
 
-    const toggleAudio = useCallback(async (text: string, chapterIndex: number, paragraphIndex: number) => {
+    const toggleAudio: ToggleAudio = useCallback(async (text, chapterIndex, paragraphIndex, onEndedCallback) => {
+        onEndedCallbackRef.current = onEndedCallback || null;
         const isCurrentParagraphActive = audioState.chapterIndex === chapterIndex && audioState.paragraphIndex === paragraphIndex;
 
         if (audioState.status === 'playing' && isCurrentParagraphActive) {
