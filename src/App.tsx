@@ -352,8 +352,9 @@ export default function App() {
             const codeBlocks = container.querySelectorAll('pre');
 
             codeBlocks.forEach(pre => {
-                // Evita adicionar um botão se ele já existir (útil em re-renderizações rápidas).
-                if (pre.parentNode?.classList.contains('code-block-wrapper')) {
+                // FIX: Check if pre.parentNode is an Element before accessing classList.
+                // The ParentNode type does not guarantee the existence of classList.
+                if (pre.parentNode instanceof Element && pre.parentNode.classList.contains('code-block-wrapper')) {
                     return;
                 }
                 
