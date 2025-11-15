@@ -8,35 +8,52 @@ if (!API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-export async function generateStudyPlan(filesContent: { name: string; content: string }[], examCode: string, additionalTopics: string): Promise<Documentation> {
+export async function generateStudyPlan(
+    source: { files?: { name: string; content: string }[]; url?: string },
+    studyTopic: string,
+    additionalTopics: string
+): Promise<Documentation> {
     let jsonText = ''; // Definido aqui para ser acessível no bloco catch
     try {
-        const prompt = `Você é o Cortex DeepMind, um assistente de IA especialista em criar planos de estudo personalizados para exames de certificação de TI.
+        const sourcePromptPart = source.url
+            ? `**Fonte de Estudo Principal (URL):**
+O usuário forneceu a seguinte URL como ponto de partida para a documentação: ${source.url}.
+Sua tarefa inclui:
+1.  **Navegação Profunda:** A partir da URL inicial, navegue pelas páginas vinculadas para explorar toda a seção da documentação. Vá a vários níveis de profundidade.
+2.  **Extração Completa:** Extraia o conteúdo completo das páginas, NÃO resuma.
+3.  **Estruturação:** Organize o conteúdo extraído em capítulos e subtópicos que reflitam a estrutura da documentação original.`
+            : `**Fonte de Estudo Principal (Arquivos do Usuário):**
+${source.files?.map(file => `--- INÍCIO DO ARQUIVO: ${file.name} ---\n${file.content}\n--- FIM DO ARQUIVO: ${file.name} ---`).join('\n\n') ?? 'Nenhum arquivo fornecido.'}`;
+        
+        const prompt = `Você é o Cortex DeepMind, um assistente de IA especialista em criar planos de estudo personalizados.
 
 **Tarefa:**
-Sua missão é gerar um plano de estudo estruturado e detalhado com base no código do exame, no conteúdo dos arquivos e nos tópicos adicionais fornecidos pelo usuário.
+Sua missão é gerar um plano de estudo estruturado e detalhado com base no TEMA DE ESTUDO, na fonte de estudo (URL ou arquivos) e nos tópicos adicionais fornecidos pelo usuário. O tema pode ser um código de exame de certificação (ex: AZ-104) ou um tópico para estudo livre (ex: Kubernetes, React).
 
-**Código do Exame:** ${examCode}
+**Tema de Estudo:** ${studyTopic}
 
-**Contexto (Conteúdo dos Arquivos do Usuário):**
-${filesContent.map(file => `--- INÍCIO DO ARQUIVO: ${file.name} ---\n${file.content}\n--- FIM DO ARQUIVO: ${file.name} ---`).join('\n\n')}
+${sourcePromptPart}
 
 ${additionalTopics.trim() ? `**Tópicos Adicionais Solicitados pelo Usuário:**
 O usuário solicitou que os seguintes tópicos ou perguntas sejam cobertos com atenção especial no plano de estudo:
 ${additionalTopics}` : ''}
 
 **Processo:**
-1.  **Identificar o Exame:** Use o código "${examCode}" para identificar o nome completo do exame e seus objetivos oficiais. Utilize a busca na web para encontrar as informações mais recentes e precisas.
-2.  **Analisar o Conteúdo:** Analise o conteúdo dos arquivos fornecidos. Este material é a base de estudo primária do usuário.
-3.  **Integrar Tópicos Adicionais:** Se houver tópicos extras solicitados, certifique-se de que sejam incorporados de forma proeminente no plano de estudo, seja como novos capítulos/subcapítulos ou como seções destacadas dentro dos tópicos existentes.
-4.  **Estruturar o Plano:** Crie um plano de estudo organizado em "chapters" (tópicos principais). Cada tópico deve corresponder a uma área de habilidade principal do exame.
-5.  **Enriquecer o Conteúdo:** Para cada tópico, sintetize as informações relevantes dos arquivos do usuário. Além disso, use a busca na web para complementar o conteúdo com insights adicionais, explicações cruciais e links para recursos externos confiáveis (documentação oficial, artigos, tutoriais em vídeo).
+1.  **Analisar a Fonte:** Processe a fonte de estudo principal.
+    - Se for uma **URL**, atue como um pesquisador web avançado. Navegue pela documentação, extraia o conteúdo completo e estruture-o.
+    - Se forem **arquivos**, analise o conteúdo fornecido.
+2.  **Identificar o Tema:** Analise o tema "${studyTopic}". 
+    - Se parecer um código de exame de certificação, identifique o nome completo do exame e seus objetivos oficiais. Utilize a busca na web para isso.
+    - Se for um tópico geral, estruture o plano de estudo em torno dos conceitos fundamentais daquela tecnologia.
+3.  **Integrar Tópicos Adicionais:** Se houver tópicos extras solicitados, certifique-se de que sejam incorporados de forma proeminente no plano de estudo.
+4.  **Estruturar o Plano:** Crie um plano de estudo organizado em "chapters" (tópicos principais). Cada tópico deve corresponder a uma área de habilidade principal do tema.
+5.  **Enriquecer o Conteúdo:** Para cada tópico, sintetize as informações da fonte principal. Além disso, use a busca na web para complementar o conteúdo com insights adicionais, explicações cruciais e links para recursos externos confiáveis (documentação oficial, artigos, tutoriais em vídeo).
 6.  **Gerar Saída JSON:** Formate o plano de estudo completo em um único objeto JSON.
 
 **Formato de Saída (JSON):**
 O JSON final deve seguir esta estrutura. O campo 'content' deve estar em formato Markdown.
 {
-  "title": "Plano de Estudo para [Nome Completo do Exame - e.g., Microsoft Certified: Azure Administrator Associate]",
+  "title": "Plano de Estudo para [Nome do Tema de Estudo - e.g., Microsoft Certified: Azure Administrator Associate ou Kubernetes]",
   "chapters": [
     {
       "title": "Tópico Principal 1 (e.g., Gerenciar Identidades e Governança do Azure)",
@@ -53,7 +70,7 @@ O JSON final deve seguir esta estrutura. O campo 'content' deve estar em formato
 }
 
 **Instruções Críticas:**
-- O título principal do JSON ("title") **deve** conter o nome completo e oficial do exame.
+- O título principal do JSON ("title") **deve** refletir claramente o tema de estudo. Se for um exame, use o nome oficial. Se for um tópico ou uma documentação web, use o nome apropriado.
 - O conteúdo ('content') deve ser rico, informativo e bem formatado em Markdown.
 - A sua resposta final deve ser **exclusivamente** o objeto JSON completo. Não inclua texto explicativo, comentários ou blocos de código markdown (\`\`\`) envolvendo o JSON.`;
 
@@ -62,6 +79,10 @@ O JSON final deve seguir esta estrutura. O campo 'content' deve estar em formato
             contents: prompt,
             config: {
                 tools: [{ googleSearch: {} }],
+                // Define um limite máximo de tokens para a resposta, ajudando a controlar custos e garantir que a saída não seja excessivamente longa.
+                maxOutputTokens: 8192,
+                // Aloca um orçamento de tokens para o "pensamento" do modelo, permitindo um raciocínio mais complexo para tarefas como pesquisa e estruturação de conteúdo.
+                thinkingConfig: { thinkingBudget: 16384 },
             },
         });
         
@@ -155,6 +176,13 @@ Responda exclusivamente com o resumo em Markdown.`;
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: prompt,
+            config: {
+                // Garante que o resumo seja conciso, limitando o número de tokens na saída.
+                maxOutputTokens: 1024,
+                // O 'thinkingBudget' reserva uma parte dos tokens para o processamento interno,
+                // deixando o restante (maxOutputTokens - thinkingBudget) para o texto final do resumo.
+                thinkingConfig: { thinkingBudget: 512 },
+            },
         });
         
         return response.text.trim();

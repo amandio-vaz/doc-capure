@@ -1,7 +1,7 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useState, useEffect } from 'react';
 import {
-    PlayIcon, PauseIcon, StopIcon, ChevronLeftIcon, ChevronRightIcon,
-    VolumeUpIcon, VolumeOffIcon, LoaderIcon
+    PlayIcon, PauseIcon, ChevronLeftIcon, ChevronRightIcon,
+    VolumeUpIcon, VolumeOffIcon, LoaderIcon, Cog6ToothIcon, XCircleIcon
 } from './icons';
 import { AudioState } from '../hooks/useAudioPlayer';
 
@@ -10,7 +10,6 @@ const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5];
 interface AudioPlayerProps {
     audioState: AudioState;
     onPlayPause: () => void;
-    onStop: () => void;
     onSeek: (time: number) => void;
     onVolumeChange: (volume: number) => void;
     onMuteToggle: () => void;
@@ -31,7 +30,6 @@ const formatTime = (timeInSeconds: number) => {
 export function AudioPlayerComponent({
     audioState,
     onPlayPause,
-    onStop,
     onSeek,
     onVolumeChange,
     onMuteToggle,
@@ -41,12 +39,76 @@ export function AudioPlayerComponent({
     isPreviousDisabled,
     isNextDisabled,
 }: AudioPlayerProps) {
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isVolumeOpen, setIsVolumeOpen] = useState(false);
+
+    const settingsRef = useRef<HTMLDivElement>(null);
+    const volumeRef = useRef<HTMLDivElement>(null);
     const progressBarRef = useRef<HTMLInputElement>(null);
 
     const handleSeek = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
         const time = parseFloat(event.target.value);
         onSeek(time);
     }, [onSeek]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+                setIsSettingsOpen(false);
+            }
+            if (volumeRef.current && !volumeRef.current.contains(event.target as Node)) {
+                setIsVolumeOpen(false);
+            }
+        };
+        
+        if (isSettingsOpen || isVolumeOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isSettingsOpen, isVolumeOpen]);
+
+     // Adiciona atalhos de teclado para o player de áudio
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ignora atalhos se o foco estiver em um input, textarea, etc.
+            const target = e.target as HTMLElement;
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) {
+                return;
+            }
+
+            switch (e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    onPlayPause();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    onSeek(Math.min(audioState.duration, audioState.currentTime + 5));
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    onSeek(Math.max(0, audioState.currentTime - 5));
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    onVolumeChange(Math.min(1, audioState.volume + 0.1));
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    onVolumeChange(Math.max(0, audioState.volume - 0.1));
+                    break;
+                case 'KeyM':
+                    e.preventDefault();
+                    onMuteToggle();
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onPlayPause, onSeek, onVolumeChange, onMuteToggle, audioState.currentTime, audioState.duration, audioState.volume]);
 
     if (audioState.status === 'idle') {
         return null;
@@ -56,7 +118,6 @@ export function AudioPlayerComponent({
 
     const isPlaying = status === 'playing';
     const isLoading = status === 'loading';
-    const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
     
     const getTrackDescription = () => {
         if (!trackInfo.chapterTitle) return '';
@@ -106,37 +167,59 @@ export function AudioPlayerComponent({
                         <button onClick={onNext} disabled={isNextDisabled} className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Próxima faixa">
                             <ChevronRightIcon className="w-6 h-6" />
                         </button>
-                        <button onClick={onStop} className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition" aria-label="Parar">
-                            <StopIcon className="w-6 h-6" />
-                        </button>
                     </div>
 
-                    <div className="flex-1 flex items-center justify-end gap-3">
-                        <div className="flex items-center gap-2 w-32">
-                            <button onClick={onMuteToggle} className="text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-white" aria-label={isMuted ? 'Ativar som' : 'Silenciar'}>
-                                {isMuted || volume === 0 ? <VolumeOffIcon className="w-5 h-5" /> : <VolumeUpIcon className="w-5 h-5" />}
-                            </button>
-                            <input
-                                type="range"
-                                min="0"
-                                max="1"
-                                step="0.05"
-                                value={isMuted ? 0 : volume}
-                                onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-                                className="w-full h-1.5 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    <div className="flex-1 flex items-center justify-end gap-2">
+                        <div ref={volumeRef} className="relative">
+                            <button 
+                                onClick={() => setIsVolumeOpen(prev => !prev)} 
+                                className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition" 
                                 aria-label="Controle de volume"
-                            />
+                            >
+                                {isMuted || volume === 0 ? <VolumeOffIcon className="w-6 h-6" /> : <VolumeUpIcon className="w-6 h-6" />}
+                            </button>
+                            {isVolumeOpen && (
+                                <div className="absolute bottom-full right-0 mb-2 w-32 bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+                                    <input
+                                        type="range"
+                                        min="0" max="1" step="0.05"
+                                        value={isMuted ? 0 : volume}
+                                        onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+                                        className="w-full h-1.5 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                        aria-label="Controle de volume"
+                                    />
+                                </div>
+                            )}
                         </div>
-                        <select
-                            value={speed}
-                            onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
-                            className="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-xs font-semibold rounded-md border-transparent focus:ring-2 focus:ring-indigo-500 focus:outline-none py-1 pl-2 pr-6"
-                            aria-label="Velocidade de reprodução"
-                        >
-                            {PLAYBACK_SPEEDS.map(s => (
-                                <option key={s} value={s}>{s}x</option>
-                            ))}
-                        </select>
+
+                       <div ref={settingsRef} className="relative">
+                            <button 
+                                onClick={() => setIsSettingsOpen(prev => !prev)} 
+                                className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition" 
+                                aria-label={isSettingsOpen ? "Fechar configurações de áudio" : "Abrir configurações de áudio"}
+                                aria-expanded={isSettingsOpen}
+                            >
+                               {isSettingsOpen ? <XCircleIcon className="w-6 h-6 text-indigo-500" /> : <Cog6ToothIcon className="w-6 h-6" />}
+                            </button>
+                            {isSettingsOpen && (
+                                <div className="absolute bottom-full right-0 mb-2 w-40 bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+                                    <div className="space-y-2">
+                                        <label htmlFor="speed-select" className="text-xs font-semibold text-gray-600 dark:text-gray-400">Velocidade</label>
+                                        <select
+                                            id="speed-select"
+                                            value={speed}
+                                            onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
+                                            className="w-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-sm font-semibold rounded-md border-transparent focus:ring-2 focus:ring-indigo-500 focus:outline-none py-1 pl-2 pr-6"
+                                            aria-label="Velocidade de reprodução"
+                                        >
+                                            {PLAYBACK_SPEEDS.map(s => (
+                                                <option key={s} value={s}>{s}x</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
+                       </div>
                     </div>
                 </div>
             </div>

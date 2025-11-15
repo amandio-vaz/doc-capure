@@ -2,6 +2,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { generateSpeech } from '../services/geminiService';
 import { decode, decodeAudioData } from '../utils/audioUtils';
+import { getAudio, storeAudio } from '../utils/db';
 import { AudioConfig } from '../types';
 
 type AudioStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
@@ -38,14 +39,21 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
         speed: audioConfig.speed,
         errorMessage: undefined,
     });
+    
+    // Usa uma ref para manter a versão mais recente do estado,
+    // permitindo que callbacks (play, pause) acessem o estado atualizado sem precisar dele em suas dependências.
+    const audioStateRef = useRef(audioState);
+    useEffect(() => {
+        audioStateRef.current = audioState;
+    }, [audioState]);
 
     const audioContextRef = useRef<AudioContext | null>(null);
     const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
     const gainNodeRef = useRef<GainNode | null>(null);
     const audioBufferRef = useRef<AudioBuffer | null>(null);
     
-    const playbackStartedAtRef = useRef<number>(0); // When playback started/resumed (in AudioContext time)
-    const playbackPausedAtRef = useRef<number>(0); // Where playback was paused (in seconds)
+    const playbackStartedAtRef = useRef<number>(0); // Quando a reprodução começou/retomou (no tempo do AudioContext)
+    const playbackPausedAtRef = useRef<number>(0); // Onde a reprodução foi pausada (em segundos)
     
     const animationFrameRef = useRef<number | null>(null);
     const generationIdRef = useRef(0);
@@ -60,7 +68,7 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
             audioSourceRef.current.onended = null;
             try {
                 audioSourceRef.current.stop();
-            } catch (e) { /* Ignore if already stopped */ }
+            } catch (e) { /* Ignora se já parado */ }
             audioSourceRef.current.disconnect();
             audioSourceRef.current = null;
         }
@@ -81,30 +89,31 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
             gainNodeRef.current.connect(audioContextRef.current.destination);
         }
         
-        stop(false); // Stop any existing playback before starting a new one
+        stop(false); // Para qualquer reprodução existente antes de iniciar uma nova
 
         const source = audioContextRef.current.createBufferSource();
         source.buffer = audioBufferRef.current;
-        source.playbackRate.value = audioState.speed;
+        source.playbackRate.value = audioStateRef.current.speed;
         source.connect(gainNodeRef.current);
 
         const updateProgress = () => {
             if (!audioContextRef.current || audioSourceRef.current?.context.state !== 'running') return;
             
             const elapsed = audioContextRef.current.currentTime - playbackStartedAtRef.current;
-            const newCurrentTime = playbackPausedAtRef.current + (elapsed * audioState.speed);
+            const newCurrentTime = playbackPausedAtRef.current + (elapsed * audioStateRef.current.speed);
             
             setAudioState(prev => ({...prev, currentTime: newCurrentTime }));
             
-            if (newCurrentTime < (audioState.duration || 0)) {
+            if (newCurrentTime < (audioStateRef.current.duration || 0)) {
                 animationFrameRef.current = requestAnimationFrame(updateProgress);
             }
         };
 
         source.onended = () => {
             if (audioSourceRef.current === source) {
-                const wasPlaying = audioState.status === 'playing';
-                const reachedEnd = Math.abs(audioState.currentTime - audioState.duration) < 0.1;
+                const currentState = audioStateRef.current;
+                const wasPlaying = currentState.status === 'playing';
+                const reachedEnd = Math.abs(currentState.currentTime - currentState.duration) < 0.1;
                 stop(true);
                 if (wasPlaying && reachedEnd && onEndedCallbackRef.current) {
                     onEndedCallbackRef.current();
@@ -112,7 +121,7 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
             }
         };
         
-        gainNodeRef.current.gain.setValueAtTime(audioState.isMuted ? 0 : audioState.volume, audioContextRef.current.currentTime);
+        gainNodeRef.current.gain.setValueAtTime(audioStateRef.current.isMuted ? 0 : audioStateRef.current.volume, audioContextRef.current.currentTime);
         source.start(0, startTime);
         
         playbackStartedAtRef.current = audioContextRef.current.currentTime;
@@ -121,15 +130,15 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
         setAudioState(prev => ({ ...prev, status: 'playing' }));
         animationFrameRef.current = requestAnimationFrame(updateProgress);
 
-    }, [stop, audioState.speed, audioState.volume, audioState.isMuted, audioState.status, audioState.currentTime, audioState.duration]);
+    }, [stop]);
 
     const pause = useCallback(() => {
         if (!audioContextRef.current) return;
         const elapsed = audioContextRef.current.currentTime - playbackStartedAtRef.current;
-        playbackPausedAtRef.current += elapsed * audioState.speed;
+        playbackPausedAtRef.current += elapsed * audioStateRef.current.speed;
         stop(false);
         setAudioState(prev => ({...prev, status: 'paused' }));
-    }, [stop, audioState.speed]);
+    }, [stop]);
 
     const playPause = useCallback(() => {
         if (audioState.status === 'playing') {
@@ -147,8 +156,19 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
         setAudioState(prev => ({ ...prev, status: 'loading', trackInfo: { chapterIndex, paragraphIndex, chapterTitle, paragraphContent: text } }));
 
         try {
-            const base64Audio = await generateSpeech(text, audioConfig.voice);
-            if (currentGenerationId !== generationIdRef.current) return;
+            // Cria uma chave única para o cache baseada na voz e no conteúdo.
+            const cacheKey = `${audioConfig.voice}::${text}`;
+            let base64Audio = await getAudio(cacheKey);
+
+            if (!base64Audio) {
+                // Se não estiver no cache, gera o áudio via API.
+                base64Audio = await generateSpeech(text, audioConfig.voice);
+                if (currentGenerationId !== generationIdRef.current) return;
+                
+                // Armazena o novo áudio no cache para uso futuro.
+                // Faz isso de forma assíncrona para não bloquear a reprodução.
+                storeAudio(cacheKey, base64Audio).catch(console.error);
+            }
 
             if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
                 audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -190,10 +210,10 @@ export function useAudioPlayer({ audioConfig, setAudioConfig }: UseAudioPlayerPr
         const newMutedState = !audioState.isMuted;
         setAudioState(prev => ({ ...prev, isMuted: newMutedState }));
         if (gainNodeRef.current && audioContextRef.current) {
-            const newVolume = newMutedState ? 0 : audioState.volume;
+            const newVolume = newMutedState ? 0 : audioStateRef.current.volume;
             gainNodeRef.current.gain.setValueAtTime(newVolume, audioContextRef.current.currentTime);
         }
-    }, [audioState.isMuted, audioState.volume]);
+    }, [audioState.isMuted]);
 
     const handleSpeedChange = useCallback((newSpeed: number) => {
         setAudioConfig(prev => ({ ...prev, speed: newSpeed }));

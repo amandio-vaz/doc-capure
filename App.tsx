@@ -6,10 +6,11 @@ import { useAudioPlayer } from './hooks/useAudioPlayer';
 import { AudioPlayerComponent } from './components/AudioPlayer';
 import {
     SparklesIcon, LoaderIcon, PlayIcon,
-    StopIcon, MarkdownIcon, HtmlIcon, PdfIcon, ChevronLeftIcon, ChevronRightIcon,
+    MarkdownIcon, HtmlIcon, PdfIcon, ChevronLeftIcon, ChevronRightIcon,
     SearchIcon, CopyIcon, CheckIcon, DocumentTextIcon,
     ArrowsPointingOutIcon, ArrowsPointingInIcon, ReplyIcon,
-    UploadCloudIcon, XCircleIcon, FileIcon, WordIcon, AudioIcon, StarIcon
+    UploadCloudIcon, XCircleIcon, FileIcon, WordIcon, AudioIcon, StarIcon,
+    Cog6ToothIcon, LinkIcon
 } from './components/icons';
 
 
@@ -30,6 +31,14 @@ interface FlattenedChapter {
     level: number;
     parentIndex: number | null;
     originalIndex: number;
+    isParent: boolean;
+}
+
+interface DetailedSearchResult {
+    chapterIndex: number;
+    snippet: string;
+    chapterTitle: string;
+    globalIndex: number;
 }
 
 const getFileIcon = (fileName: string) => {
@@ -60,7 +69,9 @@ export default function App() {
     const contentContainerRef = useRef<HTMLElement>(null);
     const [focusedTopicIndex, setFocusedTopicIndex] = useState<number | null>(null);
     const listRef = useRef<HTMLUListElement>(null);
-
+    const [activeSearchResultIndex, setActiveSearchResultIndex] = useState<number>(0);
+    const [expandedParentIndex, setExpandedParentIndex] = useState<number | null>(0);
+    
     const [summaryState, setSummaryState] = useState<{
         isLoading: boolean;
         error: string | null;
@@ -103,8 +114,9 @@ export default function App() {
         const flatten = (chapters: Chapter[], level: number, parentIdx: number | null, result: Omit<FlattenedChapter, 'originalIndex'>[] = []): Omit<FlattenedChapter, 'originalIndex'>[] => {
             chapters.forEach(ch => {
                 const currentIndex = result.length;
-                result.push({ chapter: ch, level, parentIndex: parentIdx });
-                if (ch.subChapters && ch.subChapters.length > 0) {
+                const isParent = ch.subChapters && ch.subChapters.length > 0;
+                result.push({ chapter: ch, level, parentIndex: parentIdx, isParent });
+                if (isParent) {
                     flatten(ch.subChapters, level + 1, currentIndex, result);
                 }
             });
@@ -113,19 +125,99 @@ export default function App() {
         return flatten(doc.chapters, 0, null).map((item, index) => ({ ...item, originalIndex: index }));
     }, [doc]);
 
+    // FIX: Moved detailedSearchResults before visibleChapters as it's a dependency.
+    const detailedSearchResults = useMemo((): DetailedSearchResult[] => {
+        if (!searchQuery.trim()) return [];
+
+        const query = searchQuery.trim();
+        const regex = new RegExp(query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'gi');
+        let globalIndex = 0;
+        const results: DetailedSearchResult[] = [];
+
+        flattenedChapters.forEach(({ chapter, originalIndex: chapterIndex }) => {
+            const content = chapter.content;
+            const matches = [...content.matchAll(regex)];
+            
+            matches.forEach(match => {
+                const matchIndex = match.index || 0;
+                const snippetStart = Math.max(0, matchIndex - 40);
+                const snippetEnd = Math.min(content.length, matchIndex + query.length + 40);
+                let snippet = content.substring(snippetStart, snippetEnd);
+
+                if (snippetStart > 0) snippet = '...' + snippet;
+                if (snippetEnd < content.length) snippet = snippet + '...';
+
+                snippet = snippet.replace(regex, `<mark class="bg-transparent text-yellow-300 font-bold rounded">$1</mark>`);
+
+                results.push({
+                    chapterIndex,
+                    snippet,
+                    chapterTitle: chapter.title,
+                    globalIndex: globalIndex++,
+                });
+            });
+        });
+
+        return results;
+    }, [searchQuery, flattenedChapters]);
+
+    const visibleChapters = useMemo(() => {
+        if (searchQuery.trim()) {
+            const resultIndexes = new Set(detailedSearchResults.map(r => r.chapterIndex));
+            return flattenedChapters.filter(fc => resultIndexes.has(fc.originalIndex));
+        }
+    
+        if (expandedParentIndex === null) {
+            return flattenedChapters.filter(fc => fc.level === 0);
+        }
+    
+        const visible: FlattenedChapter[] = [];
+    
+        for (const fc of flattenedChapters) {
+            if (fc.level === 0) {
+                visible.push(fc);
+            } else if (fc.parentIndex === expandedParentIndex) {
+                visible.push(fc);
+            }
+        }
+        return visible;
+    }, [flattenedChapters, expandedParentIndex, searchQuery, detailedSearchResults]);
+
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setActiveSearchResultIndex(0);
+        }
+    }, [searchQuery]);
+
     const autoPlayOnChapterChangeRef = useRef(false);
     
-    const onAudioEnded = useCallback(() => {
-        // Lógica para avançar para o próximo capítulo quando o áudio termina.
-        if (selectedChapterIndex < flattenedChapters.length - 1) {
-            // Ativa a flag de autoplay.
-            autoPlayOnChapterChangeRef.current = true;
-            // Avança para o próximo capítulo, o que irá acionar o useEffect de autoplay.
-            setSelectedChapterIndex(prev => prev + 1);
-        }
-    }, [selectedChapterIndex, flattenedChapters.length]);
-
     const { audioState, loadAndPlay, playPause, stopAudio, seekTo, handleVolumeChange, handleMuteToggle, handleSpeedChange } = useAudioPlayer({ audioConfig, setAudioConfig });
+
+    const onAudioEnded = useCallback(() => {
+        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
+        
+        const currentFlatIndex = flattenedChapters.findIndex(fc => fc.originalIndex === selectedChapterIndex);
+        if (currentFlatIndex === -1) return;
+
+        if (isPlayingSummary) {
+            const currentChapter = flattenedChapters[currentFlatIndex];
+            loadAndPlay(
+                currentChapter.chapter.content,
+                selectedChapterIndex,
+                -1,
+                onAudioEnded,
+                currentChapter.chapter.title
+            );
+        } else {
+            const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
+            const nextVisibleIndex = currentVisibleIndex + 1;
+            if (nextVisibleIndex < visibleChapters.length) {
+                autoPlayOnChapterChangeRef.current = true;
+                const nextChapterOriginalIndex = visibleChapters[nextVisibleIndex].originalIndex;
+                setSelectedChapterIndex(nextChapterOriginalIndex);
+            }
+        }
+    }, [audioState.trackInfo.chapterTitle, selectedChapterIndex, flattenedChapters, visibleChapters, loadAndPlay]);
 
     useEffect(() => {
         try {
@@ -133,21 +225,15 @@ export default function App() {
         } catch (e) { console.error("Falha ao salvar config de áudio", e); }
     }, [audioConfig]);
 
-    // Este efeito lida com a funcionalidade de autoplay.
     useEffect(() => {
-        // Verifica se a mudança de capítulo foi acionada pelo autoplay.
         if (autoPlayOnChapterChangeRef.current && doc) {
-            // Reseta a flag para evitar que o autoplay seja acionado em navegações manuais.
             autoPlayOnChapterChangeRef.current = false;
-            
-            const currentChapter = flattenedChapters[selectedChapterIndex];
+            const currentChapter = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
             if (currentChapter) {
-                 // Inicia a reprodução do novo capítulo, passando o mesmo callback `onEnded`
-                 // para encadear a reprodução para os próximos capítulos.
                  loadAndPlay(
                     currentChapter.chapter.content,
                     selectedChapterIndex,
-                    -1, // -1 indica que é o capítulo inteiro
+                    -1,
                     onAudioEnded,
                     currentChapter.chapter.title
                 );
@@ -155,37 +241,38 @@ export default function App() {
         }
     }, [selectedChapterIndex, doc, flattenedChapters, loadAndPlay, onAudioEnded]);
     
-    // Efeito para destacar resultados da busca e rolar para o primeiro
     useEffect(() => {
         const container = contentContainerRef.current;
         if (!container) return;
 
-        // Função para remover destaques anteriores
         const removeHighlights = () => {
             const marks = container.querySelectorAll('mark.cortex-highlight');
             marks.forEach(mark => {
                 const parent = mark.parentNode;
                 if (parent) {
                     parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
-                    parent.normalize(); // Junta nós de texto adjacentes
+                    parent.normalize();
                 }
             });
         };
-
         removeHighlights();
 
-        if (!searchQuery.trim()) {
-            setFocusedTopicIndex(selectedChapterIndex);
-            return; // Sai se a busca estiver vazia
+        if (!searchQuery.trim() || !doc) {
+            return;
         }
-
-        const query = searchQuery.trim();
-        const regex = new RegExp(`(${query})`, 'gi');
         
-        // Percorre todos os nós de texto para aplicar o destaque
+        const query = searchQuery.trim();
+        const regex = new RegExp(`(${query.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi');
+
+        const firstMatchInChapterGlobalIndex = detailedSearchResults.findIndex(r => r.chapterIndex === selectedChapterIndex);
+        if (firstMatchInChapterGlobalIndex === -1 && detailedSearchResults.length > 0) {
+            return;
+        }
+        let matchCountInChapter = 0;
+
         const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-        let node;
         const nodesToProcess: Text[] = [];
+        let node;
         while ((node = walker.nextNode())) {
             if (node.textContent && node.textContent.match(regex)) {
                 nodesToProcess.push(node as Text);
@@ -198,11 +285,14 @@ export default function App() {
             if (parts.length > 1) {
                 const fragment = document.createDocumentFragment();
                 parts.forEach((part, index) => {
-                    if (index % 2 === 1) { // Parte correspondente à busca
+                    if (index % 2 === 1) {
                         const mark = document.createElement('mark');
-                        mark.className = 'cortex-highlight bg-yellow-500/50 text-white rounded px-1';
+                        mark.className = 'cortex-highlight';
                         mark.textContent = part;
+                        const globalIndex = firstMatchInChapterGlobalIndex + matchCountInChapter;
+                        mark.dataset.globalMatchIndex = String(globalIndex);
                         fragment.appendChild(mark);
+                        matchCountInChapter++;
                     } else if (part) {
                         fragment.appendChild(document.createTextNode(part));
                     }
@@ -210,54 +300,49 @@ export default function App() {
                 textNode.parentNode?.replaceChild(fragment, textNode);
             }
         });
-        
-        // Rola para o primeiro resultado encontrado
-        const firstHighlight = container.querySelector('mark.cortex-highlight');
-        if (firstHighlight) {
-            firstHighlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        const activeResult = detailedSearchResults[activeSearchResultIndex];
+        if (activeResult && activeResult.chapterIndex === selectedChapterIndex) {
+            const activeElement = container.querySelector<HTMLElement>(`mark[data-global-match-index="${activeSearchResultIndex}"]`);
+            if (activeElement) {
+                activeElement.classList.add('active');
+                activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
         }
+    }, [searchQuery, selectedChapterIndex, doc, detailedSearchResults, activeSearchResultIndex]);
 
-    }, [searchQuery, selectedChapterIndex, doc]);
 
-    // Efeito para navegação por teclado na lista de tópicos
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (!listRef.current || flattenedChapters.length === 0) return;
+            if (!listRef.current || visibleChapters.length === 0 || searchQuery.trim()) return;
 
-            const currentFocused = focusedTopicIndex === null ? selectedChapterIndex : focusedTopicIndex;
-            let nextIndex = currentFocused;
+            const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === (focusedTopicIndex ?? selectedChapterIndex));
+            let nextVisibleIndex = currentVisibleIndex;
 
             switch (e.key) {
                 case 'ArrowDown':
                     e.preventDefault();
-                    nextIndex = Math.min(flattenedChapters.length - 1, currentFocused + 1);
+                    nextVisibleIndex = Math.min(visibleChapters.length - 1, currentVisibleIndex + 1);
                     break;
                 case 'ArrowUp':
                     e.preventDefault();
-                    nextIndex = Math.max(0, currentFocused - 1);
+                    nextVisibleIndex = Math.max(0, currentVisibleIndex - 1);
                     break;
                 case 'Enter':
                     e.preventDefault();
                     if (focusedTopicIndex !== null) {
-                        handleChapterSelect(focusedTopicIndex);
+                        const chapterToSelect = flattenedChapters.find(fc => fc.originalIndex === focusedTopicIndex);
+                        if(chapterToSelect) handleChapterSelect(chapterToSelect.originalIndex);
                     }
-                    return; // Retorna para não chamar setFocusedTopicIndex novamente
-                case 'Home':
-                    e.preventDefault();
-                    nextIndex = 0;
-                    break;
-                case 'End':
-                    e.preventDefault();
-                    nextIndex = flattenedChapters.length - 1;
-                    break;
+                    return;
                 default:
-                    return; // Ignora outras teclas
+                    return;
             }
 
-            if (nextIndex !== currentFocused) {
-                setFocusedTopicIndex(nextIndex);
-                // Garante que o item focado esteja visível
-                const itemElement = listRef.current.querySelector(`[data-index="${nextIndex}"]`);
+            if (nextVisibleIndex !== currentVisibleIndex) {
+                const nextOriginalIndex = visibleChapters[nextVisibleIndex].originalIndex;
+                setFocusedTopicIndex(nextOriginalIndex);
+                const itemElement = listRef.current.querySelector(`[data-index="${nextOriginalIndex}"]`);
                 itemElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
         };
@@ -268,15 +353,20 @@ export default function App() {
         return () => {
             listElement?.removeEventListener('keydown', handleKeyDown);
         };
-    }, [focusedTopicIndex, selectedChapterIndex, flattenedChapters]);
+    }, [focusedTopicIndex, selectedChapterIndex, visibleChapters, searchQuery]);
 
     useEffect(() => {
       setFocusedTopicIndex(selectedChapterIndex);
     }, [selectedChapterIndex]);
 
-    const handleGeneratePlan = async (files: File[], examCode: string, additionalTopics: string) => {
-        if (files.length === 0 || !examCode.trim()) {
-            setError("Por favor, adicione arquivos e um código de exame.");
+    const handleGeneratePlan = async (
+        source: { type: 'files'; data: File[] } | { type: 'url'; data: string },
+        studyTopic: string,
+        additionalTopics: string
+    ) => {
+        const isSourceInvalid = (source.type === 'files' && source.data.length === 0) || (source.type === 'url' && !source.data.trim());
+        if (isSourceInvalid || !studyTopic.trim()) {
+            setError("Por favor, forneça uma fonte de estudo (arquivos ou URL) e um tema.");
             return;
         }
     
@@ -285,20 +375,25 @@ export default function App() {
         setDoc(null);
     
         try {
-            const fileContents = await Promise.all(
-                files.map(file => new Promise<{name: string; content: string}>((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve({ name: file.name, content: reader.result as string });
-                    reader.onerror = (error) => reject(new Error(`Erro ao ler o arquivo ${file.name}: ${error}`));
-                    // Simplificação: Trata todos os arquivos como texto. Para PDF/DOCX, seria necessário uma lib de extração.
-                    reader.readAsText(file);
-                }))
-            );
+            let studyPlan;
+            if (source.type === 'files') {
+                const fileContents = await Promise.all(
+                    source.data.map(file => new Promise<{name: string; content: string}>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve({ name: file.name, content: reader.result as string });
+                        reader.onerror = (error) => reject(new Error(`Erro ao ler o arquivo ${file.name}: ${error}`));
+                        reader.readAsText(file);
+                    }))
+                );
+                studyPlan = await generateStudyPlan({ files: fileContents }, studyTopic, additionalTopics);
+            } else { // source.type === 'url'
+                studyPlan = await generateStudyPlan({ url: source.data }, studyTopic, additionalTopics);
+            }
 
-            const studyPlan = await generateStudyPlan(fileContents, examCode, additionalTopics);
             setDoc(studyPlan);
             setSelectedChapterIndex(0);
             setFocusedTopicIndex(0);
+            setExpandedParentIndex(0);
             setSearchQuery('');
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido.";
@@ -326,17 +421,26 @@ export default function App() {
     };
 
     const handleChapterSelect = (index: number) => {
+        const chapter = flattenedChapters.find(fc => fc.originalIndex === index);
+        if (!chapter) return;
+    
+        if (chapter.isParent && chapter.level === 0) {
+            setExpandedParentIndex(prev => (prev === index ? null : index));
+        }
+
         if (audioState.status === 'playing' || audioState.status === 'paused') {
             autoPlayOnChapterChangeRef.current = true;
         } else {
              autoPlayOnChapterChangeRef.current = false;
         }
         setSelectedChapterIndex(index);
+        setSearchQuery('');
     };
 
     const handleGenerateSummary = async (chapterIndex: number) => {
-        if (!doc || !flattenedChapters[chapterIndex]) return;
-        const { chapter } = flattenedChapters[chapterIndex];
+        const chapterData = flattenedChapters.find(fc => fc.originalIndex === chapterIndex);
+        if (!doc || !chapterData) return;
+        const { chapter } = chapterData;
         
         setSummaryState({
             isLoading: true, error: null, content: null, chapterTitle: chapter.title, 
@@ -376,56 +480,88 @@ export default function App() {
     const handlePlaySummary = () => {
         if (!summaryState.content || summaryState.chapterIndex === null || !summaryState.chapterTitle) return;
 
-        // Ao tocar um resumo, o callback onEnded é uma função vazia para não avançar para o próximo capítulo.
+        setSelectedChapterIndex(summaryState.chapterIndex);
+
         loadAndPlay(
             summaryState.content,
             summaryState.chapterIndex,
-            -1, // Usar -1 para indicar que é um resumo, não um parágrafo
-            () => {}, // Callback de 'onEnded' vazio para resumos
+            -1,
+            onAudioEnded,
             `Resumo: ${summaryState.chapterTitle}`
         );
         
-        // Fechar o modal para o usuário ver o player
         setSummaryState(prev => ({ ...prev, isModalOpen: false }));
     };
 
-    const handlePreviousChapter = () => {
-        if (selectedChapterIndex > 0) {
-            // Se o áudio já estiver tocando, ativa o autoplay para o capítulo anterior.
-            if (audioState.status === 'playing' || audioState.status === 'paused') {
-                autoPlayOnChapterChangeRef.current = true;
-            }
-            setSelectedChapterIndex(prev => prev - 1);
-        }
-    };
-    
-    const handleNextChapter = () => {
-        if (selectedChapterIndex < flattenedChapters.length - 1) {
-            // Se o áudio já estiver tocando, ativa o autoplay para o próximo capítulo.
-            if (audioState.status === 'playing' || audioState.status === 'paused') {
-                autoPlayOnChapterChangeRef.current = true;
-            }
-            setSelectedChapterIndex(prev => prev + 1);
+    const navigateToSearchResult = (index: number) => {
+        if (index < 0 || index >= detailedSearchResults.length) return;
+
+        const result = detailedSearchResults[index];
+        setActiveSearchResultIndex(index);
+        
+        if (selectedChapterIndex !== result.chapterIndex) {
+            setSelectedChapterIndex(result.chapterIndex);
         }
     };
 
-    const searchResults = useMemo(() => {
-        if (!doc || !searchQuery) return [];
-        return flattenedChapters.filter(fc => fc.chapter.title.toLowerCase().includes(searchQuery.toLowerCase())).map(fc => fc.originalIndex);
-    }, [doc, searchQuery, flattenedChapters]);
+    const handlePreviousResult = () => navigateToSearchResult(activeSearchResultIndex - 1);
+    const handleNextResult = () => navigateToSearchResult(activeSearchResultIndex + 1);
+
+    const navigateChapterAudio = (direction: 'next' | 'previous') => {
+        const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
+        if (currentVisibleIndex === -1) return;
+
+        const targetVisibleIndex = direction === 'next' ? currentVisibleIndex + 1 : currentVisibleIndex - 1;
+
+        if (targetVisibleIndex >= 0 && targetVisibleIndex < visibleChapters.length) {
+            const targetChapter = visibleChapters[targetVisibleIndex];
+            if (audioState.status === 'playing' || audioState.status === 'paused') {
+                autoPlayOnChapterChangeRef.current = true;
+            }
+            setSelectedChapterIndex(targetChapter.originalIndex);
+        }
+    };
+
+    const handlePreviousChapter = () => {
+        navigateChapterAudio('previous');
+    };
+    
+    const handleNextChapter = () => {
+        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
+        const currentChapter = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
+        
+        if (isPlayingSummary && currentChapter) {
+            loadAndPlay(
+                currentChapter.chapter.content,
+                selectedChapterIndex,
+                -1,
+                onAudioEnded,
+                currentChapter.chapter.title
+            );
+        } else {
+            navigateChapterAudio('next');
+        }
+    };
     
     const Header = () => (
-        <header className="relative text-center p-6">
-            <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-indigo-500 flex items-center justify-center gap-3">
-                <SparklesIcon className="w-10 h-10" />
-                Cortex DeepMind
-            </h1>
-            <p className="text-gray-400 mt-2 text-lg">Seu plano de estudo para certificação, turbinado com IA.</p>
+        <header className="relative flex justify-center p-4 sm:p-6 mb-6">
+            <div className="w-full max-w-2xl text-center bg-gray-900/30 border border-dashed border-gray-700 rounded-lg p-6 sm:p-8 sm:pt-6 backdrop-blur-sm relative overflow-hidden">
+                 <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 animate-pulse"></div>
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400 flex items-center justify-center gap-2 sm:gap-3 mt-4">
+                    <SparklesIcon className="w-8 h-8 sm:w-10 sm:h-10" />
+                    Cortex DeepMind
+                </h1>
+                <p className="text-gray-300 mt-3 text-base sm:text-lg max-w-lg mx-auto">
+                    Seu plano de estudo para certificação e estudo livre, turbinado por Agentes IA Autônomos
+                </p>
+            </div>
         </header>
     );
 
     const StudyPlanForm = () => {
+        const [sourceType, setSourceType] = useState<'files' | 'url'>('files');
         const [files, setFiles] = useState<File[]>([]);
+        const [docUrl, setDocUrl] = useState('');
         const [examCode, setExamCode] = useState<string>('');
         const [examName, setExamName] = useState<string>('');
         const [additionalTopics, setAdditionalTopics] = useState<string>('');
@@ -462,42 +598,91 @@ export default function App() {
         };
     
         return (
-            <div className="w-full max-w-3xl mx-auto mt-10 px-4">
-                <form onSubmit={(e) => { e.preventDefault(); handleGeneratePlan(files, examCode, additionalTopics); }} className="flex flex-col gap-6 bg-gray-900/50 backdrop-blur-sm p-6 rounded-2xl border border-gray-800">
+            <div className="w-full max-w-3xl mx-auto px-4">
+                <form 
+                    onSubmit={(e) => { 
+                        e.preventDefault(); 
+                        const source = sourceType === 'files' ? { type: 'files' as const, data: files } : { type: 'url' as const, data: docUrl };
+                        handleGeneratePlan(source, examCode, additionalTopics);
+                    }} 
+                    className="flex flex-col gap-6 bg-gray-900/50 backdrop-blur-sm p-6 rounded-2xl border border-gray-800"
+                >
                     <div>
                         <label className="block text-lg font-semibold mb-3 text-gray-200">1. Adicione seus materiais de estudo</label>
-                        <div
-                            onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-                            onClick={() => fileInputRef.current?.click()}
-                            className={`relative flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-900/20' : 'border-gray-600 hover:border-gray-500'}`}
-                        >
-                            <UploadCloudIcon className="w-12 h-12 text-gray-500 mb-3" />
-                            <p className="text-gray-400">Arraste e solte até 10 arquivos aqui</p>
-                            <p className="text-sm text-gray-500">ou clique para selecionar (PDF, MD, DOCX, HTML)</p>
-                            <input type="file" ref={fileInputRef} onChange={e => handleFiles(e.target.files)} multiple hidden accept=".pdf,.md,.docx,.doc,.html" />
+                        <div className="flex mb-3 rounded-lg bg-gray-800 p-1">
+                            <button
+                                type="button"
+                                onClick={() => setSourceType('files')}
+                                className={`w-1/2 p-2 rounded-md text-sm font-semibold transition-colors ${sourceType === 'files' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}
+                            >
+                                <div className="flex items-center justify-center gap-2">
+                                    <UploadCloudIcon className="w-5 h-5"/>
+                                    <span>Upload de Arquivos</span>
+                                </div>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSourceType('url')}
+                                className={`w-1/2 p-2 rounded-md text-sm font-semibold transition-colors ${sourceType === 'url' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}
+                            >
+                               <div className="flex items-center justify-center gap-2">
+                                    <LinkIcon className="w-5 h-5"/>
+                                    <span>Importar de URL</span>
+                                </div>
+                            </button>
                         </div>
-                        {files.length > 0 && (
-                            <div className="mt-4 space-y-2">
-                                {files.map(file => (
-                                    <div key={file.name} className="flex items-center justify-between bg-gray-800 p-2 rounded-md text-sm">
-                                        <div className="flex items-center gap-3">
-                                            {getFileIcon(file.name)}
-                                            <span className="text-gray-300">{file.name}</span>
-                                        </div>
-                                        <button type="button" onClick={() => removeFile(file.name)} className="p-1 text-gray-500 hover:text-red-400 rounded-full">
-                                            <XCircleIcon className="w-5 h-5" />
-                                        </button>
+
+                        {sourceType === 'files' ? (
+                            <>
+                                <div
+                                    onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className={`relative flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-900/20' : 'border-gray-600 hover:border-gray-500'}`}
+                                >
+                                    <UploadCloudIcon className="w-12 h-12 text-gray-500 mb-3" />
+                                    <p className="text-gray-400">Arraste e solte até 10 arquivos aqui</p>
+                                    <p className="text-sm text-gray-500">ou clique para selecionar (PDF, MD, DOCX, HTML)</p>
+                                    <input type="file" ref={fileInputRef} onChange={e => handleFiles(e.target.files)} multiple hidden accept=".pdf,.md,.docx,.doc,.html" />
+                                </div>
+                                {files.length > 0 && (
+                                    <div className="mt-4 space-y-2">
+                                        {files.map(file => (
+                                            <div key={file.name} className="flex items-center justify-between bg-gray-800 p-2 rounded-md text-sm">
+                                                <div className="flex items-center gap-3">
+                                                    {getFileIcon(file.name)}
+                                                    <span className="text-gray-300">{file.name}</span>
+                                                </div>
+                                                <button type="button" onClick={() => removeFile(file.name)} className="p-1 text-gray-500 hover:text-red-400 rounded-full">
+                                                    <XCircleIcon className="w-5 h-5" />
+                                                </button>
+                                            </div>
+                                        ))}
                                     </div>
-                                ))}
+                                )}
+                            </>
+                        ) : (
+                            <div className="p-4 border-2 border-dashed border-gray-600 rounded-lg">
+                                <label htmlFor="doc-url" className="sr-only">URL da documentação</label>
+                                <div className="relative">
+                                     <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
+                                     <input
+                                        id="doc-url" type="url" value={docUrl} onChange={e => setDocUrl(e.target.value)}
+                                        placeholder="Ex: https://kubernetes.io/docs/home/"
+                                        className="w-full bg-gray-800 border border-gray-700 text-white rounded-md pl-10 pr-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+                                        disabled={isLoading}
+                                        required={sourceType === 'url'}
+                                    />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-2 px-1">A IA irá navegar a partir do link inicial para extrair e estruturar a documentação.</p>
                             </div>
                         )}
                     </div>
     
                     <div>
-                        <label htmlFor="exam-code" className="block text-lg font-semibold mb-3 text-gray-200">2. Insira o código do exame</label>
+                        <label htmlFor="exam-code" className="block text-lg font-semibold mb-3 text-gray-200">2. Insira o código do exame ou tecnologia para estudo livre</label>
                         <input
                             id="exam-code" type="text" value={examCode} onChange={e => setExamCode(e.target.value)}
-                            placeholder="Ex: AZ-104, CCNA 200-301..."
+                            placeholder="Ex: AZ-104, Kubernetes, React..."
                             className="w-full bg-gray-800 border border-gray-700 text-white rounded-md px-4 py-3 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
                             disabled={isLoading}
                             required
@@ -517,7 +702,7 @@ export default function App() {
                         />
                     </div>
     
-                    <button type="submit" disabled={isLoading || files.length === 0 || !examCode} className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold px-6 py-4 rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-300 text-lg shadow-lg shadow-indigo-900/50">
+                    <button type="submit" disabled={isLoading || ((sourceType === 'files' && files.length === 0) || (sourceType === 'url' && !docUrl.trim())) || !examCode.trim()} className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold px-6 py-4 rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-300 text-lg shadow-lg shadow-indigo-900/50">
                         {isLoading ? <LoaderIcon className="animate-spin w-6 h-6" /> : <SparklesIcon className="w-6 h-6" />}
                         <span>{isLoading ? 'Gerando Plano...' : 'Gerar Plano de Estudo'}</span>
                     </button>
@@ -533,6 +718,22 @@ export default function App() {
     );
 
     const hasActiveAudio = audioState.status !== 'idle';
+    const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
+    
+    const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
+
+    const isNextDisabled = useMemo(() => {
+        if (!doc) return true;
+        if (isPlayingSummary) return false;
+        return currentVisibleIndex >= visibleChapters.length - 1;
+    }, [doc, isPlayingSummary, currentVisibleIndex, visibleChapters.length]);
+
+    const isPreviousDisabled = useMemo(() => {
+        if (!doc) return true;
+        return currentVisibleIndex <= 0;
+    }, [doc, currentVisibleIndex]);
+
+    const selectedChapterData = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
 
     return (
         <div className="bg-transparent text-gray-200 min-h-screen flex flex-col">
@@ -573,45 +774,96 @@ export default function App() {
                             {!isFocusMode && (
                                 <aside className="lg:col-span-4 xl:col-span-3">
                                     <div className="sticky top-8 bg-gray-900/50 backdrop-blur-sm rounded-lg p-4 border border-gray-800">
-                                        <h3 className="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">Tópicos do Plano</h3>
-                                        <div className="relative mb-4">
+                                        <h3 className="text-xl font-semibold mb-4 border-b border-gray-700 pb-2">{searchQuery.trim() ? 'Resultados da Busca' : 'Tópicos do Plano'}</h3>
+                                        <div className="relative mb-2">
                                             <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 pointer-events-none" />
                                             <input
-                                                type="text" placeholder="Buscar tópicos..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+                                                type="text" placeholder="Buscar no conteúdo..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                                                 className="w-full bg-gray-800 border border-gray-700 text-white rounded-md pl-10 pr-4 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
                                             />
                                         </div>
-                                        <ul ref={listRef} tabIndex={0} className="space-y-1 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-md">
-                                            {flattenedChapters.map(({ chapter, level, parentIndex, originalIndex }) => (
-                                                <li key={originalIndex} data-index={originalIndex} className="flex items-center gap-1 group">
-                                                    <a
-                                                        href="#"
-                                                        onClick={(e) => { e.preventDefault(); handleChapterSelect(originalIndex); }}
-                                                        style={{ paddingLeft: `${12 + level * 20}px` }}
-                                                        className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === originalIndex ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md' : searchResults.includes(originalIndex) ? 'bg-indigo-900/40 text-gray-200 hover:bg-indigo-900/60' : 'text-gray-300 hover:bg-gray-800'} ${focusedTopicIndex === originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
-                                                    >
-                                                        {chapter.title}
-                                                    </a>
-                                                     {parentIndex !== null && (
-                                                        <button onClick={() => handleChapterSelect(parentIndex)} className="flex-shrink-0 p-2 rounded-full text-gray-500 opacity-0 group-hover:opacity-100 hover:bg-gray-700 hover:text-gray-300 transition-opacity" title="Ir para Tópico Pai">
-                                                            <ReplyIcon className="w-4 h-4" />
-                                                        </button>
-                                                    )}
-                                                    <button onClick={() => handleGenerateSummary(originalIndex)} disabled={summaryState.isLoading && summaryState.chapterIndex === originalIndex} className="flex-shrink-0 p-2 rounded-full hover:bg-gray-700 text-gray-400 disabled:opacity-50 disabled:cursor-wait transition" title="Gerar resumo do tópico">
-                                                        {summaryState.isLoading && summaryState.chapterIndex === originalIndex ? <LoaderIcon className="w-5 h-5 animate-spin" /> : <DocumentTextIcon className="w-5 h-5" />}
+                                        {searchQuery.trim() && detailedSearchResults.length > 0 && (
+                                            <div className="flex items-center justify-between text-sm text-gray-400 mb-2 px-1">
+                                                <span>{detailedSearchResults.length} resultado(s)</span>
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={handlePreviousResult} disabled={activeSearchResultIndex <= 0} className="p-1 rounded-full hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                                        <ChevronLeftIcon className="w-5 h-5" />
                                                     </button>
-                                                </li>
-                                            ))}
+                                                    <span>{activeSearchResultIndex + 1} de {detailedSearchResults.length}</span>
+                                                    <button onClick={handleNextResult} disabled={activeSearchResultIndex >= detailedSearchResults.length - 1} className="p-1 rounded-full hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                                        <ChevronRightIcon className="w-5 h-5" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <ul ref={listRef} tabIndex={0} className="space-y-1 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-md">
+                                            {searchQuery.trim() ? (
+                                                detailedSearchResults.length > 0 ? (
+                                                    detailedSearchResults.map(result => (
+                                                        <li key={result.globalIndex}>
+                                                            <a
+                                                                href="#"
+                                                                onClick={(e) => { e.preventDefault(); navigateToSearchResult(result.globalIndex); }}
+                                                                className={`block p-3 rounded-lg text-sm transition-all duration-200 ${activeSearchResultIndex === result.globalIndex ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-gray-800'}`}
+                                                            >
+                                                                <div className="font-semibold text-indigo-300 truncate">{result.chapterTitle}</div>
+                                                                <div className="text-xs text-gray-400 mt-1" dangerouslySetInnerHTML={{ __html: result.snippet }} />
+                                                            </a>
+                                                        </li>
+                                                    ))
+                                                ) : (
+                                                    <li className="p-4 text-center text-gray-500">Nenhum resultado encontrado.</li>
+                                                )
+                                            ) : (
+                                                flattenedChapters.filter(fc => fc.level === 0).map(chapterData => (
+                                                    <li key={chapterData.originalIndex}>
+                                                        <div
+                                                            onClick={() => handleChapterSelect(chapterData.originalIndex)}
+                                                            data-index={chapterData.originalIndex}
+                                                            className="flex items-center justify-between cursor-pointer group"
+                                                        >
+                                                            <a
+                                                                href="#"
+                                                                onClick={(e) => e.preventDefault()}
+                                                                className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === chapterData.originalIndex ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md' : 'text-gray-300 hover:bg-gray-800'} ${focusedTopicIndex === chapterData.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
+                                                            >
+                                                                {chapterData.chapter.title}
+                                                            </a>
+                                                            {chapterData.isParent && (
+                                                                <ChevronRightIcon className={`w-5 h-5 mr-2 flex-shrink-0 transition-transform ${expandedParentIndex === chapterData.originalIndex ? 'rotate-90' : ''}`} />
+                                                            )}
+                                                        </div>
+                                                        <div className={`grid transition-all duration-300 ease-in-out ${expandedParentIndex === chapterData.originalIndex ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                                                            <div className="overflow-hidden">
+                                                                <ul className="pl-4 pt-1 space-y-1">
+                                                                    {flattenedChapters.filter(fc => fc.parentIndex === chapterData.originalIndex).map(subChapter => (
+                                                                         <li key={subChapter.originalIndex} data-index={subChapter.originalIndex} className="flex items-center gap-1 group">
+                                                                            <a
+                                                                                href="#"
+                                                                                onClick={(e) => { e.preventDefault(); handleChapterSelect(subChapter.originalIndex); }}
+                                                                                style={{ paddingLeft: `${12}px` }}
+                                                                                className={`flex-grow text-left p-2 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === subChapter.originalIndex ? 'bg-indigo-700 text-white font-semibold' : 'text-gray-400 hover:bg-gray-800'} ${focusedTopicIndex === subChapter.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
+                                                                            >
+                                                                                {subChapter.chapter.title}
+                                                                            </a>
+                                                                         </li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        </div>
+                                                    </li>
+                                                ))
+                                            )}
                                         </ul>
                                     </div>
                                 </aside>
                             )}
                             <article ref={contentContainerRef} className={`${isFocusMode ? 'h-screen overflow-y-auto' : 'lg:col-span-8 xl:col-span-9 min-h-[70vh]'} bg-gray-900/50 backdrop-blur-sm rounded-lg p-6 border border-gray-800`}>
-                                {flattenedChapters[selectedChapterIndex] && (
+                                {selectedChapterData && (
                                     <>
                                         <div className="mb-6 pb-4 border-b border-gray-700">
                                             <div className="flex justify-between items-center mb-4">
-                                                <h3 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400">{flattenedChapters[selectedChapterIndex].chapter.title}</h3>
+                                                <h3 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400">{selectedChapterData.chapter.title}</h3>
                                                 {!isFocusMode && (
                                                     <button onClick={() => setIsFocusMode(true)} className="p-2 rounded-full text-gray-400 hover:bg-gray-700 transition-colors" title="Modo Focado">
                                                         <ArrowsPointingOutIcon className="w-6 h-6" />
@@ -619,23 +871,22 @@ export default function App() {
                                                 )}
                                             </div>
 
-                                            <div className="flex items-center gap-4 mb-4">
-                                                <button onClick={() => handleChapterSelect(Math.max(0, selectedChapterIndex - 1))} disabled={selectedChapterIndex === 0} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                            <div className="flex items-center gap-4 mb-4 flex-wrap">
+                                                <button onClick={handlePreviousChapter} disabled={isPreviousDisabled} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition">
                                                     <ChevronLeftIcon className="w-4 h-4"/> <span>Anterior</span>
                                                 </button>
-                                                <button onClick={() => handleChapterSelect(Math.min(flattenedChapters.length - 1, selectedChapterIndex + 1))} disabled={selectedChapterIndex === flattenedChapters.length - 1} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                                <button onClick={handleNextChapter} disabled={isNextDisabled} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition">
                                                     <span>Próximo</span> <ChevronRightIcon className="w-4 h-4"/>
                                                 </button>
                                                 <button
                                                     onClick={() => {
-                                                        const currentChapter = flattenedChapters[selectedChapterIndex];
-                                                        if (currentChapter) {
+                                                        if (selectedChapterData) {
                                                             loadAndPlay(
-                                                                currentChapter.chapter.content,
+                                                                selectedChapterData.chapter.content,
                                                                 selectedChapterIndex,
-                                                                -1, // -1 indica que é o capítulo inteiro
+                                                                -1,
                                                                 onAudioEnded,
-                                                                currentChapter.chapter.title
+                                                                selectedChapterData.chapter.title
                                                             );
                                                         }
                                                     }}
@@ -646,11 +897,15 @@ export default function App() {
                                                     <AudioIcon className="w-4 h-4"/>
                                                     <span>Ouvir</span>
                                                 </button>
+                                                 <button onClick={() => handleGenerateSummary(selectedChapterIndex)} disabled={summaryState.isLoading && summaryState.chapterIndex === selectedChapterIndex} className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-sm font-medium disabled:opacity-50 disabled:cursor-wait transition" title="Gerar resumo do tópico">
+                                                    {summaryState.isLoading && summaryState.chapterIndex === selectedChapterIndex ? <LoaderIcon className="w-4 h-4 animate-spin" /> : <DocumentTextIcon className="w-4 h-4" />}
+                                                    <span>Resumir</span>
+                                                </button>
                                             </div>
 
                                             <div className={`prose prose-invert max-w-none prose-pre:bg-gray-900 prose-pre:rounded-md prose-pre:border prose-pre:border-gray-700 prose-img:rounded-md prose-a:text-indigo-400 hover:prose-a:text-indigo-300 prose-strong:text-gray-100`}>
                                                 <div className={`${isFocusMode ? 'max-w-3xl mx-auto py-8' : ''}`}>
-                                                    <div className="select-text" dangerouslySetInnerHTML={{ __html: converter.makeHtml(flattenedChapters[selectedChapterIndex].chapter.content) }}/>
+                                                    <div className="select-text" dangerouslySetInnerHTML={{ __html: converter.makeHtml(selectedChapterData.chapter.content) }}/>
                                                 </div>
                                             </div>
                                         </div>
@@ -711,15 +966,14 @@ export default function App() {
             <AudioPlayerComponent
                 audioState={audioState}
                 onPlayPause={playPause}
-                onStop={stopAudio}
                 onSeek={seekTo}
                 onVolumeChange={handleVolumeChange}
                 onMuteToggle={handleMuteToggle}
                 onSpeedChange={handleSpeedChange}
                 onNext={handleNextChapter}
                 onPrevious={handlePreviousChapter}
-                isNextDisabled={!doc || selectedChapterIndex >= flattenedChapters.length - 1}
-                isPreviousDisabled={!doc || selectedChapterIndex <= 0}
+                isNextDisabled={isNextDisabled}
+                isPreviousDisabled={isPreviousDisabled}
             />
             {!isFocusMode && <Footer />}
         </div>
