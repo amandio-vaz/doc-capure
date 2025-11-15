@@ -11,7 +11,7 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 export async function generateStudyPlan(filesContent: { name: string; content: string }[], examCode: string, additionalTopics: string): Promise<Documentation> {
     let jsonText = ''; // Definido aqui para ser acessível no bloco catch
     try {
-        const prompt = `Você é o CortexPrep, um assistente de IA especialista em criar planos de estudo personalizados para exames de certificação de TI.
+        const prompt = `Você é o Cortex DeepMind, um assistente de IA especialista em criar planos de estudo personalizados para exames de certificação de TI.
 
 **Tarefa:**
 Sua missão é gerar um plano de estudo estruturado e detalhado com base no código do exame, no conteúdo dos arquivos e nos tópicos adicionais fornecidos pelo usuário.

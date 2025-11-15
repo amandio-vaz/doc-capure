@@ -116,9 +116,11 @@ export default function App() {
     const autoPlayOnChapterChangeRef = useRef(false);
     
     const onAudioEnded = useCallback(() => {
-        // Verifica se há um próximo capítulo
+        // Lógica para avançar para o próximo capítulo quando o áudio termina.
         if (selectedChapterIndex < flattenedChapters.length - 1) {
+            // Ativa a flag de autoplay.
             autoPlayOnChapterChangeRef.current = true;
+            // Avança para o próximo capítulo, o que irá acionar o useEffect de autoplay.
             setSelectedChapterIndex(prev => prev + 1);
         }
     }, [selectedChapterIndex, flattenedChapters.length]);
@@ -131,24 +133,27 @@ export default function App() {
         } catch (e) { console.error("Falha ao salvar config de áudio", e); }
     }, [audioConfig]);
 
+    // Este efeito lida com a funcionalidade de autoplay.
     useEffect(() => {
+        // Verifica se a mudança de capítulo foi acionada pelo autoplay.
         if (autoPlayOnChapterChangeRef.current && doc) {
+            // Reseta a flag para evitar que o autoplay seja acionado em navegações manuais.
             autoPlayOnChapterChangeRef.current = false;
+            
             const currentChapter = flattenedChapters[selectedChapterIndex];
             if (currentChapter) {
+                 // Inicia a reprodução do novo capítulo, passando o mesmo callback `onEnded`
+                 // para encadear a reprodução para os próximos capítulos.
                  loadAndPlay(
                     currentChapter.chapter.content,
                     selectedChapterIndex,
-                    -1,
+                    -1, // -1 indica que é o capítulo inteiro
                     onAudioEnded,
                     currentChapter.chapter.title
                 );
             }
-        } else {
-             stopAudio();
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedChapterIndex, doc]);
+    }, [selectedChapterIndex, doc, flattenedChapters, loadAndPlay, onAudioEnded]);
     
     // Efeito para destacar resultados da busca e rolar para o primeiro
     useEffect(() => {
@@ -371,16 +376,37 @@ export default function App() {
     const handlePlaySummary = () => {
         if (!summaryState.content || summaryState.chapterIndex === null || !summaryState.chapterTitle) return;
 
+        // Ao tocar um resumo, o callback onEnded é uma função vazia para não avançar para o próximo capítulo.
         loadAndPlay(
             summaryState.content,
             summaryState.chapterIndex,
-            -1, // Usar -1 para indicar que é um resumo
+            -1, // Usar -1 para indicar que é um resumo, não um parágrafo
             () => {}, // Callback de 'onEnded' vazio para resumos
             `Resumo: ${summaryState.chapterTitle}`
         );
         
         // Fechar o modal para o usuário ver o player
         setSummaryState(prev => ({ ...prev, isModalOpen: false }));
+    };
+
+    const handlePreviousChapter = () => {
+        if (selectedChapterIndex > 0) {
+            // Se o áudio já estiver tocando, ativa o autoplay para o capítulo anterior.
+            if (audioState.status === 'playing' || audioState.status === 'paused') {
+                autoPlayOnChapterChangeRef.current = true;
+            }
+            setSelectedChapterIndex(prev => prev - 1);
+        }
+    };
+    
+    const handleNextChapter = () => {
+        if (selectedChapterIndex < flattenedChapters.length - 1) {
+            // Se o áudio já estiver tocando, ativa o autoplay para o próximo capítulo.
+            if (audioState.status === 'playing' || audioState.status === 'paused') {
+                autoPlayOnChapterChangeRef.current = true;
+            }
+            setSelectedChapterIndex(prev => prev + 1);
+        }
     };
 
     const searchResults = useMemo(() => {
@@ -392,7 +418,7 @@ export default function App() {
         <header className="relative text-center p-6">
             <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-indigo-500 flex items-center justify-center gap-3">
                 <SparklesIcon className="w-10 h-10" />
-                CortexPrepExam
+                Cortex DeepMind
             </h1>
             <p className="text-gray-400 mt-2 text-lg">Seu plano de estudo para certificação, turbinado com IA.</p>
         </header>
@@ -682,7 +708,19 @@ export default function App() {
                     <ArrowsPointingInIcon className="w-6 h-6" />
                 </button>
             )}
-            <AudioPlayerComponent audioState={audioState} onPlayPause={playPause} onStop={stopAudio} onSeek={seekTo} onVolumeChange={handleVolumeChange} onMuteToggle={handleMuteToggle} onSpeedChange={handleSpeedChange} onNext={() => {}} onPrevious={() => {}}/>
+            <AudioPlayerComponent
+                audioState={audioState}
+                onPlayPause={playPause}
+                onStop={stopAudio}
+                onSeek={seekTo}
+                onVolumeChange={handleVolumeChange}
+                onMuteToggle={handleMuteToggle}
+                onSpeedChange={handleSpeedChange}
+                onNext={handleNextChapter}
+                onPrevious={handlePreviousChapter}
+                isNextDisabled={!doc || selectedChapterIndex >= flattenedChapters.length - 1}
+                isPreviousDisabled={!doc || selectedChapterIndex <= 0}
+            />
             {!isFocusMode && <Footer />}
         </div>
     );

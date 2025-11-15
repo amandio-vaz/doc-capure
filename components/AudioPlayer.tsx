@@ -17,6 +17,8 @@ interface AudioPlayerProps {
     onSpeedChange: (speed: number) => void;
     onNext: () => void;
     onPrevious: () => void;
+    isPreviousDisabled: boolean;
+    isNextDisabled: boolean;
 }
 
 const formatTime = (timeInSeconds: number) => {
@@ -34,6 +36,10 @@ export function AudioPlayerComponent({
     onVolumeChange,
     onMuteToggle,
     onSpeedChange,
+    onNext,
+    onPrevious,
+    isPreviousDisabled,
+    isNextDisabled,
 }: AudioPlayerProps) {
     const progressBarRef = useRef<HTMLInputElement>(null);
 
@@ -91,8 +97,14 @@ export function AudioPlayerComponent({
                     </div>
 
                     <div className="flex items-center gap-2 md:gap-4">
+                        <button onClick={onPrevious} disabled={isPreviousDisabled} className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Faixa anterior">
+                            <ChevronLeftIcon className="w-6 h-6" />
+                        </button>
                         <button onClick={onPlayPause} disabled={isLoading} className="p-3 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition disabled:bg-indigo-400 disabled:cursor-wait" aria-label={isPlaying ? 'Pausar' : 'Tocar'}>
                             {isLoading ? <LoaderIcon className="w-6 h-6 animate-spin" /> : (isPlaying ? <PauseIcon className="w-6 h-6" /> : <PlayIcon className="w-6 h-6" />)}
+                        </button>
+                        <button onClick={onNext} disabled={isNextDisabled} className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Próxima faixa">
+                            <ChevronRightIcon className="w-6 h-6" />
                         </button>
                         <button onClick={onStop} className="p-2 rounded-full text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition" aria-label="Parar">
                             <StopIcon className="w-6 h-6" />

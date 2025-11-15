@@ -1,5 +1,5 @@
 {
-  "name": "CortexPrepExam - Gerador de Plano de Estudo IA",
+  "name": "Cortex DeepMind - Gerador de Plano de Estudo IA",
   "description": "Uma aplicação de IA que cria planos de estudo detalhados para exames de certificação. Faça upload de seus materiais, forneça o código do exame e receba um guia de estudo estruturado e enriquecido.",
   "requestFramePermissions": []
 }
