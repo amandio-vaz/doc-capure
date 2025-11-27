@@ -1,3 +1,5 @@
+
+
 // FIX: Import React to resolve 'Cannot find namespace React' error.
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { generateSpeech } from '../services/geminiService';
@@ -77,6 +79,8 @@ export function useAudioPlayer() {
     
     const animationFrameRef = useRef<number | null>(null);
     const generationIdRef = useRef(0);
+    // FIX: Initialize `onEndedCallbackRef` to `null` as `onAudioEnded` is not defined in this scope.
+    // The actual callback is passed during `loadAndPlay`.
     const onEndedCallbackRef = useRef<(() => void) | null>(null);
     const updateProgressRef = useRef<() => void>();
 

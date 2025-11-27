@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Documentation, Chapter, AudioConfig } from './types';
 import { generateStudyPlan, generateChapterSummary } from './services/geminiService';
@@ -224,6 +225,100 @@ export default function App() {
     
     const selectedChapterData = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
 
+    // Hoisted: handleChapterSelect must be defined before any useEffect using it
+    const handleChapterSelect = useCallback((index: number) => {
+        const chapter = flattenedChapters.find(fc => fc.originalIndex === index);
+        if (!chapter) return;
+    
+        if (chapter.isParent && chapter.level === 0) {
+            setExpandedParentIndex(prev => (prev === index ? null : index));
+        }
+
+        if (audioState.status === 'playing' || audioState.status === 'paused') {
+            autoPlayOnChapterChangeRef.current = true;
+        } else {
+             autoPlayOnChapterChangeRef.current = false;
+        }
+        setSelectedChapterIndex(index);
+        setSearchQuery('');
+    }, [audioState.status, flattenedChapters]);
+
+    // Hoisted: navigateChapterAudio must be defined before handlePreviousChapter/handleNextChapter using it
+    const navigateChapterAudio = useCallback((direction: 'next' | 'previous') => {
+        const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
+        if (currentVisibleIndex === -1) return;
+
+        const targetVisibleIndex = direction === 'next' ? currentVisibleIndex + 1 : currentVisibleIndex - 1;
+
+        if (targetVisibleIndex >= 0 && targetVisibleIndex < visibleChapters.length) {
+            const targetChapter = visibleChapters[targetVisibleIndex];
+            if (audioState.status === 'playing' || audioState.status === 'paused') {
+                autoPlayOnChapterChangeRef.current = true;
+            }
+            setSelectedChapterIndex(targetChapter.originalIndex);
+        }
+    }, [selectedChapterIndex, visibleChapters, audioState.status]);
+
+    // Hoisted: handlePreviousChapter must be defined before any useEffect using it
+    const handlePreviousChapter = useCallback(() => {
+        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
+    
+        // Verifica se estamos reproduzindo um capítulo completo para o qual o último resumo gerado corresponde
+        const summaryIsAvailableForCurrentChapter = 
+            summaryState.content && 
+            summaryState.chapterTitle &&
+            summaryState.chapterIndex === selectedChapterIndex;
+    
+        if (!isPlayingSummary && summaryIsAvailableForCurrentChapter) {
+            // Se estiver reproduzindo um capítulo completo e seu resumo estiver disponível, volte a reproduzir o resumo.
+            loadAndPlay(
+                summaryState.content,
+                selectedChapterIndex,
+                -1,
+                onAudioEnded, // Use the onAudioEnded callback
+                `Resumo: ${summaryState.chapterTitle}`
+            );
+        } else {
+            // Caso contrário (se estiver reproduzindo um resumo ou um capítulo completo sem um resumo disponível),
+            // apenas navegue para o capítulo anterior na lista visível.
+            navigateChapterAudio('previous');
+        }
+    }, [audioState.trackInfo.chapterTitle, summaryState.content, summaryState.chapterTitle, summaryState.chapterIndex, selectedChapterIndex, loadAndPlay, onAudioEnded, navigateChapterAudio]);
+    
+    // Hoisted: handleNextChapter must be defined before any useEffect using it
+    const handleNextChapter = useCallback(() => {
+        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
+        const currentChapter = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
+        
+        if (isPlayingSummary && currentChapter) {
+            loadAndPlay(
+                currentChapter.chapter.content,
+                selectedChapterIndex,
+                -1,
+                onAudioEnded, // Use the onAudioEnded callback
+                currentChapter.chapter.title
+            );
+        } else {
+            navigateChapterAudio('next');
+        }
+    }, [audioState.trackInfo.chapterTitle, flattenedChapters, selectedChapterIndex, loadAndPlay, onAudioEnded, navigateChapterAudio]);
+
+    // Hoisted: navigateToSearchResult and related handlers
+    const navigateToSearchResult = useCallback((index: number) => {
+        if (index < 0 || index >= detailedSearchResults.length) return;
+
+        const result = detailedSearchResults[index];
+        setActiveSearchResultIndex(index);
+        
+        if (selectedChapterIndex !== result.chapterIndex) {
+            setSelectedChapterIndex(result.chapterIndex);
+        }
+    }, [detailedSearchResults, selectedChapterIndex]);
+
+    const handlePreviousResult = useCallback(() => navigateToSearchResult(activeSearchResultIndex - 1), [navigateToSearchResult, activeSearchResultIndex]);
+    const handleNextResult = useCallback(() => navigateToSearchResult(activeSearchResultIndex + 1), [navigateToSearchResult, activeSearchResultIndex]);
+
+
     useEffect(() => {
         const container = contentContainerRef.current;
         if (!container) return;
@@ -297,46 +392,77 @@ export default function App() {
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (!listRef.current || visibleChapters.length === 0 || searchQuery.trim()) return;
+            const target = e.target as HTMLElement;
+            const isInputFocused = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
 
-            const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === (focusedTopicIndex ?? selectedChapterIndex));
-            let nextVisibleIndex = currentVisibleIndex;
-
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    nextVisibleIndex = Math.min(visibleChapters.length - 1, currentVisibleIndex + 1);
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    nextVisibleIndex = Math.max(0, currentVisibleIndex - 1);
-                    break;
-                case 'Enter':
-                    e.preventDefault();
-                    if (focusedTopicIndex !== null) {
-                        const chapterToSelect = flattenedChapters.find(fc => fc.originalIndex === focusedTopicIndex);
-                        if(chapterToSelect) handleChapterSelect(chapterToSelect.originalIndex);
-                    }
-                    return;
-                default:
-                    return;
+            if (isInputFocused) {
+                return; // Don't interfere with typing in input fields
             }
 
-            if (nextVisibleIndex !== currentVisibleIndex) {
-                const nextOriginalIndex = visibleChapters[nextVisibleIndex].originalIndex;
-                setFocusedTopicIndex(nextOriginalIndex);
-                const itemElement = listRef.current.querySelector(`[data-index="${nextOriginalIndex}"]`);
-                itemElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            if (doc && !searchQuery.trim()) { // Chapter navigation (ArrowUp/Down, Left/Right)
+                const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === (focusedTopicIndex ?? selectedChapterIndex));
+                let nextVisibleIndex = currentVisibleIndex;
+
+                switch (e.key) {
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        nextVisibleIndex = Math.min(visibleChapters.length - 1, currentVisibleIndex + 1);
+                        break;
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        nextVisibleIndex = Math.max(0, currentVisibleIndex - 1);
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        handleNextChapter();
+                        return;
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        handlePreviousChapter();
+                        return;
+                    case 'Enter':
+                        e.preventDefault();
+                        if (focusedTopicIndex !== null) {
+                            const chapterToSelect = flattenedChapters.find(fc => fc.originalIndex === focusedTopicIndex);
+                            if(chapterToSelect) handleChapterSelect(chapterToSelect.originalIndex);
+                        }
+                        return;
+                    default:
+                        // Do not prevent default for other keys if not handled
+                        break;
+                }
+
+                if (nextVisibleIndex !== currentVisibleIndex) {
+                    const nextOriginalIndex = visibleChapters[nextVisibleIndex].originalIndex;
+                    setFocusedTopicIndex(nextOriginalIndex);
+                    const itemElement = listRef.current?.querySelector(`[data-index="${nextOriginalIndex}"]`);
+                    itemElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            } else if (searchQuery.trim() && detailedSearchResults.length > 0) { // Search result navigation (N, P)
+                switch (e.key) {
+                    case 'n': // Next search result
+                    case 'N':
+                        e.preventDefault();
+                        handleNextResult();
+                        break;
+                    case 'p': // Previous search result
+                    case 'P':
+                        e.preventDefault();
+                        handlePreviousResult();
+                        break;
+                    default:
+                        // Do not prevent default for other keys
+                        break;
+                }
             }
         };
 
-        const listElement = listRef.current;
-        listElement?.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keydown', handleKeyDown);
 
         return () => {
-            listElement?.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [focusedTopicIndex, selectedChapterIndex, visibleChapters, searchQuery]);
+    }, [focusedTopicIndex, selectedChapterIndex, visibleChapters, searchQuery, doc, handleNextChapter, handlePreviousChapter, flattenedChapters, handleChapterSelect, detailedSearchResults.length, handleNextResult, handlePreviousResult]);
 
     useEffect(() => {
       setFocusedTopicIndex(selectedChapterIndex);
@@ -352,8 +478,9 @@ export default function App() {
             const codeBlocks = container.querySelectorAll('pre');
 
             codeBlocks.forEach(pre => {
-                // Evita adicionar um botão se ele já existir (útil em re-renderizações rápidas).
-                if (pre.parentNode?.classList.contains('code-block-wrapper')) {
+                // FIX: Check if pre.parentNode is an Element before accessing classList.
+                // The ParentNode type does not guarantee the existence of classList.
+                if (pre.parentNode instanceof Element && pre.parentNode.classList.contains('code-block-wrapper')) {
                     return;
                 }
                 
@@ -462,23 +589,6 @@ export default function App() {
         }).catch(err => console.error('Falha ao copiar texto: ', err));
     };
 
-    const handleChapterSelect = (index: number) => {
-        const chapter = flattenedChapters.find(fc => fc.originalIndex === index);
-        if (!chapter) return;
-    
-        if (chapter.isParent && chapter.level === 0) {
-            setExpandedParentIndex(prev => (prev === index ? null : index));
-        }
-
-        if (audioState.status === 'playing' || audioState.status === 'paused') {
-            autoPlayOnChapterChangeRef.current = true;
-        } else {
-             autoPlayOnChapterChangeRef.current = false;
-        }
-        setSelectedChapterIndex(index);
-        setSearchQuery('');
-    };
-
     const handleGenerateSummary = async (chapterIndex: number) => {
         const chapterData = flattenedChapters.find(fc => fc.originalIndex === chapterIndex);
         if (!doc || !chapterData) return;
@@ -535,76 +645,6 @@ export default function App() {
         setSummaryState(prev => ({ ...prev, isModalOpen: false }));
     };
 
-    const navigateToSearchResult = (index: number) => {
-        if (index < 0 || index >= detailedSearchResults.length) return;
-
-        const result = detailedSearchResults[index];
-        setActiveSearchResultIndex(index);
-        
-        if (selectedChapterIndex !== result.chapterIndex) {
-            setSelectedChapterIndex(result.chapterIndex);
-        }
-    };
-
-    const handlePreviousResult = () => navigateToSearchResult(activeSearchResultIndex - 1);
-    const handleNextResult = () => navigateToSearchResult(activeSearchResultIndex + 1);
-
-    const navigateChapterAudio = (direction: 'next' | 'previous') => {
-        const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
-        if (currentVisibleIndex === -1) return;
-
-        const targetVisibleIndex = direction === 'next' ? currentVisibleIndex + 1 : currentVisibleIndex - 1;
-
-        if (targetVisibleIndex >= 0 && targetVisibleIndex < visibleChapters.length) {
-            const targetChapter = visibleChapters[targetVisibleIndex];
-            if (audioState.status === 'playing' || audioState.status === 'paused') {
-                autoPlayOnChapterChangeRef.current = true;
-            }
-            setSelectedChapterIndex(targetChapter.originalIndex);
-        }
-    };
-
-    const handlePreviousChapter = () => {
-        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
-    
-        // Verifica se estamos reproduzindo um capítulo completo para o qual o último resumo gerado corresponde
-        const summaryIsAvailableForCurrentChapter = 
-            summaryState.content && 
-            summaryState.chapterTitle &&
-            summaryState.chapterIndex === selectedChapterIndex;
-    
-        if (!isPlayingSummary && summaryIsAvailableForCurrentChapter) {
-            // Se estiver reproduzindo um capítulo completo e seu resumo estiver disponível, volte a reproduzir o resumo.
-            loadAndPlay(
-                summaryState.content,
-                selectedChapterIndex,
-                -1,
-                onAudioEnded,
-                `Resumo: ${summaryState.chapterTitle}`
-            );
-        } else {
-            // Caso contrário (se estiver reproduzindo um resumo ou um capítulo completo sem um resumo disponível),
-            // apenas navegue para o capítulo anterior na lista visível.
-            navigateChapterAudio('previous');
-        }
-    };
-    
-    const handleNextChapter = () => {
-        const isPlayingSummary = audioState.trackInfo.chapterTitle?.startsWith('Resumo:');
-        const currentChapter = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
-        
-        if (isPlayingSummary && currentChapter) {
-            loadAndPlay(
-                currentChapter.chapter.content,
-                selectedChapterIndex,
-                -1,
-                onAudioEnded,
-                currentChapter.chapter.title
-            );
-        } else {
-            navigateChapterAudio('next');
-        }
-    };
     
     const Header = () => (
         <header className="relative flex justify-center p-4 sm:p-6 mb-6">
