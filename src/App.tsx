@@ -11,7 +11,7 @@ import {
     SearchIcon, CopyIcon, CheckIcon, DocumentTextIcon,
     ArrowsPointingOutIcon, ArrowsPointingInIcon, ReplyIcon,
     UploadCloudIcon, XCircleIcon, FileIcon, WordIcon, AudioIcon, StarIcon,
-    Cog6ToothIcon, LinkIcon
+    Cog6ToothIcon, LinkIcon, StopIcon
 } from './components/icons';
 
 
@@ -26,6 +26,9 @@ const MOCK_EXAMS: { [key: string]: string } = {
     'AWS-SAA-C03': 'AWS Certified Solutions Architect – Associate',
     'GCP-ACE': 'Google Cloud Certified - Associate Cloud Engineer'
 };
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const ALLOWED_EXTENSIONS = ['.pdf', '.md', '.docx', '.doc', '.html', '.txt'];
 
 interface FlattenedChapter {
     chapter: Chapter;
@@ -243,6 +246,14 @@ export default function App() {
         setSearchQuery('');
     }, [audioState.status, flattenedChapters]);
 
+    // Ensure parent is expanded if a child is selected (e.g. after search or logic update)
+    useEffect(() => {
+        const selectedChapter = flattenedChapters.find(fc => fc.originalIndex === selectedChapterIndex);
+        if (selectedChapter && selectedChapter.parentIndex !== null) {
+             setExpandedParentIndex(selectedChapter.parentIndex);
+        }
+    }, [selectedChapterIndex, flattenedChapters]);
+
     // Hoisted: navigateChapterAudio must be defined before handlePreviousChapter/handleNextChapter using it
     const navigateChapterAudio = useCallback((direction: 'next' | 'previous') => {
         const currentVisibleIndex = visibleChapters.findIndex(vc => vc.originalIndex === selectedChapterIndex);
@@ -317,6 +328,7 @@ export default function App() {
 
     const handlePreviousResult = useCallback(() => navigateToSearchResult(activeSearchResultIndex - 1), [navigateToSearchResult, activeSearchResultIndex]);
     const handleNextResult = useCallback(() => navigateToSearchResult(activeSearchResultIndex + 1), [navigateToSearchResult, activeSearchResultIndex]);
+
 
     useEffect(() => {
         const container = contentContainerRef.current;
@@ -477,7 +489,8 @@ export default function App() {
             const codeBlocks = container.querySelectorAll('pre');
 
             codeBlocks.forEach(pre => {
-                // Check if pre.parentNode is an Element before accessing classList to avoid TS errors
+                // FIX: Check if pre.parentNode is an Element before accessing classList.
+                // The ParentNode type does not guarantee the existence of classList.
                 if (pre.parentNode instanceof Element && pre.parentNode.classList.contains('code-block-wrapper')) {
                     return;
                 }
@@ -548,7 +561,7 @@ export default function App() {
                     source.data.map(file => new Promise<{name: string; content: string}>((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = () => resolve({ name: file.name, content: reader.result as string });
-                        reader.onerror = (error) => reject(new Error(`Erro ao ler o arquivo ${file.name}: ${error}`));
+                        reader.onerror = () => reject(new Error(`Falha ao ler o arquivo ${file.name}. Pode estar corrompido ou inacessível.`));
                         reader.readAsText(file);
                     }))
                 );
@@ -563,7 +576,23 @@ export default function App() {
             setExpandedParentIndex(0);
             setSearchQuery('');
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : "Ocorreu um erro desconhecido.";
+            let errorMessage = "Ocorreu um erro desconhecido.";
+            if (err instanceof Error) {
+                // Tratamento de erros de rede e API mais amigável
+                if (err.message.includes("fetch failed") || err.message.includes("NetworkError")) {
+                    errorMessage = "Falha na conexão de rede. Verifique sua internet e tente novamente.";
+                } else if (err.message.includes("400")) {
+                     errorMessage = "Solicitação inválida. Verifique os arquivos enviados ou o link da URL.";
+                } else if (err.message.includes("429")) {
+                     errorMessage = "O serviço está ocupado (muitas solicitações). Aguarde um momento e tente novamente.";
+                } else if (err.message.includes("500") || err.message.includes("503")) {
+                     errorMessage = "Erro temporário no serviço de IA. Tente novamente em instantes.";
+                } else if (err.message.includes("JSON")) {
+                    errorMessage = "Erro ao processar a resposta da IA. Tente reformular o tema ou usar menos arquivos.";
+                } else {
+                    errorMessage = err.message;
+                }
+            }
             setError(errorMessage);
         } finally {
             setIsLoading(false);
@@ -667,6 +696,7 @@ export default function App() {
         const [examName, setExamName] = useState<string>('');
         const [additionalTopics, setAdditionalTopics] = useState<string>('');
         const [isDragging, setIsDragging] = useState(false);
+        const [fileError, setFileError] = useState<string | null>(null);
         const fileInputRef = useRef<HTMLInputElement>(null);
     
         useEffect(() => {
@@ -681,14 +711,48 @@ export default function App() {
     
         const handleFiles = (incomingFiles: FileList | null) => {
             if (!incomingFiles) return;
-            setFiles(prev => {
-                const combined = [...prev, ...Array.from(incomingFiles)];
-                const unique = combined.filter((file, index, self) => index === self.findIndex(f => f.name === file.name));
-                return unique.slice(0, 10);
+            setFileError(null);
+            
+            const validFiles: File[] = [];
+            let errorMsg: string | null = null;
+
+            Array.from(incomingFiles).forEach(file => {
+                const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+                
+                if (file.size > MAX_FILE_SIZE) {
+                    errorMsg = `O arquivo "${file.name}" excede o limite de 10MB.`;
+                    return;
+                }
+                
+                if (!ALLOWED_EXTENSIONS.includes(ext)) {
+                    errorMsg = `O arquivo "${file.name}" tem um formato não suportado.`;
+                    return;
+                }
+                
+                validFiles.push(file);
             });
+
+            if (errorMsg) {
+                setFileError(errorMsg);
+            }
+
+            if (validFiles.length > 0) {
+                setFiles(prev => {
+                    const combined = [...prev, ...validFiles];
+                    const unique = combined.filter((file, index, self) => index === self.findIndex(f => f.name === file.name));
+                    if (unique.length > 10) {
+                        setFileError(prevError => prevError ? `${prevError} Limite de 10 arquivos atingido.` : "O limite máximo é de 10 arquivos.");
+                        return unique.slice(0, 10);
+                    }
+                    return unique;
+                });
+            }
         };
     
-        const removeFile = (fileName: string) => setFiles(prev => prev.filter(f => f.name !== fileName));
+        const removeFile = (fileName: string) => {
+             setFiles(prev => prev.filter(f => f.name !== fileName));
+             setFileError(null);
+        };
     
         const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
         const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
@@ -738,13 +802,20 @@ export default function App() {
                                 <div
                                     onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
                                     onClick={() => fileInputRef.current?.click()}
-                                    className={`relative flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-900/20' : 'border-gray-600 hover:border-gray-500'}`}
+                                    className={`relative flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-indigo-500 bg-indigo-900/20' : 'border-gray-600 hover:border-gray-500'} ${fileError ? 'border-red-500/50 bg-red-900/10' : ''}`}
                                 >
-                                    <UploadCloudIcon className="w-12 h-12 text-gray-500 mb-3" />
+                                    <UploadCloudIcon className={`w-12 h-12 mb-3 ${fileError ? 'text-red-400' : 'text-gray-500'}`} />
                                     <p className="text-gray-400">Arraste e solte até 10 arquivos aqui</p>
-                                    <p className="text-sm text-gray-500">ou clique para selecionar (PDF, MD, DOCX, HTML)</p>
-                                    <input type="file" ref={fileInputRef} onChange={e => handleFiles(e.target.files)} multiple hidden accept=".pdf,.md,.docx,.doc,.html" />
+                                    <p className="text-sm text-gray-500">ou clique para selecionar (PDF, MD, DOCX, HTML, TXT)</p>
+                                    <p className="text-xs text-gray-600 mt-2">Máx. 10MB por arquivo</p>
+                                    <input type="file" ref={fileInputRef} onChange={e => handleFiles(e.target.files)} multiple hidden accept=".pdf,.md,.docx,.doc,.html,.txt" />
                                 </div>
+                                {fileError && (
+                                    <div className="mt-2 text-red-400 text-sm bg-red-900/20 p-2 rounded border border-red-800 flex items-center gap-2 animate-pulse">
+                                        <XCircleIcon className="w-4 h-4 flex-shrink-0" />
+                                        <span>{fileError}</span>
+                                    </div>
+                                )}
                                 {files.length > 0 && (
                                     <div className="mt-4 space-y-2">
                                         {files.map(file => (
@@ -752,6 +823,7 @@ export default function App() {
                                                 <div className="flex items-center gap-3">
                                                     {getFileIcon(file.name)}
                                                     <span className="text-gray-300">{file.name}</span>
+                                                    <span className="text-xs text-gray-500">({(file.size / 1024).toFixed(0)}KB)</span>
                                                 </div>
                                                 <button type="button" onClick={() => removeFile(file.name)} className="p-1 text-gray-500 hover:text-red-400 rounded-full">
                                                     <XCircleIcon className="w-5 h-5" />
@@ -915,41 +987,73 @@ export default function App() {
                                                 )
                                             ) : (
                                                 flattenedChapters.filter(fc => fc.level === 0).map(chapterData => (
-                                                    <li key={chapterData.originalIndex}>
+                                                    <li key={chapterData.originalIndex} className="mb-1">
                                                         <div
                                                             onClick={() => handleChapterSelect(chapterData.originalIndex)}
                                                             data-index={chapterData.originalIndex}
-                                                            className="flex items-center justify-between cursor-pointer group"
+                                                            className={`flex items-center gap-2 p-3 rounded-lg cursor-pointer transition-all duration-200 group ${
+                                                                selectedChapterIndex === chapterData.originalIndex 
+                                                                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md' 
+                                                                    : 'text-gray-300 hover:bg-gray-800'
+                                                            } ${focusedTopicIndex === chapterData.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
                                                         >
-                                                            <a
-                                                                href="#"
-                                                                onClick={(e) => e.preventDefault()}
-                                                                className={`flex-grow text-left p-3 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === chapterData.originalIndex ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold shadow-md' : 'text-gray-300 hover:bg-gray-800'} ${focusedTopicIndex === chapterData.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
-                                                            >
-                                                                {chapterData.chapter.title}
-                                                            </a>
+                                                            {chapterData.isParent ? (
+                                                                <ChevronRightIcon 
+                                                                    className={`w-4 h-4 flex-shrink-0 transition-transform duration-300 ${
+                                                                        expandedParentIndex === chapterData.originalIndex ? 'rotate-90' : ''
+                                                                    } ${selectedChapterIndex === chapterData.originalIndex ? 'text-white' : 'text-gray-500 group-hover:text-gray-300'}`} 
+                                                                />
+                                                            ) : (
+                                                                <div className="w-4 h-4 flex-shrink-0" /> // Spacer
+                                                            )}
+                                                            
+                                                            <span className="flex-grow text-sm truncate">{chapterData.chapter.title}</span>
+                                                            
                                                             {chapterData.isParent && (
-                                                                <ChevronRightIcon className={`w-5 h-5 mr-2 flex-shrink-0 transition-transform ${expandedParentIndex === chapterData.originalIndex ? 'rotate-90' : ''}`} />
+                                                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                                                    selectedChapterIndex === chapterData.originalIndex 
+                                                                        ? 'bg-white/20 text-white' 
+                                                                        : 'bg-gray-800 text-gray-500 group-hover:bg-gray-700 group-hover:text-gray-400'
+                                                                }`}>
+                                                                    {chapterData.chapter.subChapters?.length}
+                                                                </span>
                                                             )}
                                                         </div>
-                                                        <div className={`grid transition-all duration-300 ease-in-out ${expandedParentIndex === chapterData.originalIndex ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
-                                                            <div className="overflow-hidden">
-                                                                <ul className="pl-4 pt-1 space-y-1">
-                                                                    {flattenedChapters.filter(fc => fc.parentIndex === chapterData.originalIndex).map(subChapter => (
-                                                                         <li key={subChapter.originalIndex} data-index={subChapter.originalIndex} className="flex items-center gap-1 group">
-                                                                            <a
-                                                                                href="#"
-                                                                                onClick={(e) => { e.preventDefault(); handleChapterSelect(subChapter.originalIndex); }}
-                                                                                style={{ paddingLeft: `${12}px` }}
-                                                                                className={`flex-grow text-left p-2 rounded-lg text-sm transition-all duration-200 ${selectedChapterIndex === subChapter.originalIndex ? 'bg-indigo-700 text-white font-semibold' : 'text-gray-400 hover:bg-gray-800'} ${focusedTopicIndex === subChapter.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
-                                                                            >
-                                                                                {subChapter.chapter.title}
-                                                                            </a>
-                                                                         </li>
-                                                                    ))}
-                                                                </ul>
+                                                        
+                                                        {chapterData.isParent && (
+                                                            <div 
+                                                                className={`grid transition-all duration-300 ease-in-out ${
+                                                                    expandedParentIndex === chapterData.originalIndex 
+                                                                        ? 'grid-rows-[1fr] opacity-100' 
+                                                                        : 'grid-rows-[0fr] opacity-0'
+                                                                }`}
+                                                            >
+                                                                <div className="overflow-hidden">
+                                                                    <ul className="mt-1 ml-3 pl-3 border-l border-gray-700/50 space-y-1 pb-1">
+                                                                        {flattenedChapters
+                                                                            .filter(fc => fc.parentIndex === chapterData.originalIndex)
+                                                                            .map(subChapter => (
+                                                                                <li key={subChapter.originalIndex} data-index={subChapter.originalIndex}>
+                                                                                    <div
+                                                                                        onClick={(e) => { 
+                                                                                            e.stopPropagation(); 
+                                                                                            handleChapterSelect(subChapter.originalIndex); 
+                                                                                        }}
+                                                                                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer text-sm transition-all duration-200 ${
+                                                                                            selectedChapterIndex === subChapter.originalIndex 
+                                                                                                ? 'bg-gray-800 text-indigo-400 font-medium border border-gray-700' 
+                                                                                                : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200 border border-transparent'
+                                                                                        } ${focusedTopicIndex === subChapter.originalIndex ? 'ring-2 ring-offset-2 ring-offset-gray-900 ring-indigo-500' : ''}`}
+                                                                                    >
+                                                                                        <span className={`w-1.5 h-1.5 rounded-full ${selectedChapterIndex === subChapter.originalIndex ? 'bg-indigo-400' : 'bg-gray-600'}`}></span>
+                                                                                        <span className="truncate">{subChapter.chapter.title}</span>
+                                                                                    </div>
+                                                                                </li>
+                                                                            ))}
+                                                                    </ul>
+                                                                </div>
                                                             </div>
-                                                        </div>
+                                                        )}
                                                     </li>
                                                 ))
                                             )}
